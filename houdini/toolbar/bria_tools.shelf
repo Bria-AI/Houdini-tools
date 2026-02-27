@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <!-- This file contains definitions of shelves, toolbars, and tools.
+ It should not be hand-edited when it is being used by the application.
+ Note, that two definitions of the same element are not allowed in
+ a single file. -->
+
+  <toolshelf name="bria_ai" label="Bria AI">
+    <memberTool name="bria_dashboard"/>
+  </toolshelf>
+
+  <tool name="bria_dashboard" label="Bria Dashboard" icon="PLASMA_App">
+    <script scriptType="python"><![CDATA[import hou
+import traceback
+
+def open_bria_dashboard_panel():
+    """Open the Bria Dashboard Python Panel."""
+
+    interface = hou.pypanel.interfaceByName("bria_dashboard")
+    if interface is None:
+        raise RuntimeError("Python panel 'bria_dashboard' not found. Check HOUDINI_PYTHON_PANEL_PATH.")
+
+    # Find an existing Python Panel tab
+    python_panel = hou.ui.paneTabOfType(hou.paneTabType.PythonPanel)
+
+    if python_panel is None:
+        # No existing panel found, create one
+        pane = hou.ui.curDesktop().createFloatingPane(hou.paneTabType.PythonPanel)
+        python_panel = pane.tabs()[0]
+
+    python_panel.setActiveInterface(interface)
+    if hasattr(python_panel, "setIsCurrentTab"):
+        python_panel.setIsCurrentTab()
+
+    # Verify active interface actually switched
+    active = python_panel.activeInterface()
+    if active is None or active.name() != "bria_dashboard":
+        raise RuntimeError("Failed to activate 'bria_dashboard' panel.")
+
+    return True
+
+
+# Open the Bria Configuration Python Panel
+try:
+    open_bria_dashboard_panel()
+except Exception as e:
+    tb = traceback.format_exc()
+    hou.ui.displayMessage(
+        f"Could not open dashboard panel: {e}\n\n{tb}",
+        title="Bria Dashboard",
+        severity=hou.severityType.Warning
+    )
+    ]]></script>
+  </tool>
+</shelfDocument>

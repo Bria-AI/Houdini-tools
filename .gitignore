@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Internal review docs (kept locally)
+Houdini_Integration_Code_Review_*.md
+changelog.md

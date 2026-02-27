@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "name": "bria_houdini",
+  "description": "Bria Houdini integration (HDAs + API adapter). IMPORTANT: Set BRIA_HOUDINI_ROOT via launcher env or edit this JSON when copied into Houdini prefs.",
+  "env": [
+    {
+      "BRIA_HOUDINI_ROOT": {
+        "value": "$BRIA_HOUDINI_ROOT",
+        "method": "replace"
+      }
+    },
+    {
+      "PYTHONPATH": {
+        "value": "$BRIA_HOUDINI_ROOT/..",
+        "method": "prepend"
+      }
+    },
+    {
+      "HOUDINI_OTLSCAN_PATH": {
+        "value": "$BRIA_HOUDINI_ROOT/hdas",
+        "method": "prepend"
+      }
+    },
+    {
+      "HOUDINI_TOOLBAR_PATH": {
+        "value": "$BRIA_HOUDINI_ROOT/toolbar",
+        "method": "prepend"
+      }
+    },
+    {
+      "HOUDINI_PYTHON_PANEL_PATH": {
+        "value": "$BRIA_HOUDINI_ROOT/python_panels",
+        "method": "prepend"
+      }
+    },
+    {
+      "SSL_CERT_FILE": {
+        "value": "/etc/ssl/cert.pem",
+        "method": "replace"
+      }
+    }
+  ]
+}
