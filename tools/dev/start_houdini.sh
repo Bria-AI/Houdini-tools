@@ -3,9 +3,8 @@
 # Resolve script location dynamically
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd -P)"
 
-# Bria-specific vars
-export BRIA_HOUDINI_ROOT="$(cd "$SCRIPT_DIR/houdini" && pwd -P)"
-export HOUDINI_PACKAGE_DIR="$(cd "$SCRIPT_DIR/houdini/packages" && pwd -P)"
+# Bria-specific vars — repo root is the package dir (bria_houdini.json lives there)
+export HOUDINI_PACKAGE_DIR="$SCRIPT_DIR"
 
 # TLS/SSL certificate bundle for Houdini's embedded Python on macOS
 BRIA_CA_BUNDLE_PATH=""

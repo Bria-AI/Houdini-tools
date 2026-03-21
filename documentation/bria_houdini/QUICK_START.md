@@ -2,19 +2,17 @@
 
 ## 1) Install / auto-load the HDAs
 
-Recommended (simplest): use the Houdini package JSON.
+Point Houdini at the repo root:
 
-1. Copy `houdini/packages/bria_houdini.json` into your Houdini prefs `packages` folder.
-2. Set `BRIA_HOUDINI_ROOT` (under `env`) using one of these two supported modes:
-	- **Launcher/env mode (recommended for studios):** export `BRIA_HOUDINI_ROOT` before launching Houdini and keep JSON as-is.
-	- **Copied-JSON mode (single-user/manual):** replace `$BRIA_HOUDINI_ROOT` in the copied JSON with an absolute path to your delivery's `houdini` folder.
-3. Restart Houdini.
+```
+export HOUDINI_PACKAGE_DIR=/path/to/bria-houdini
+```
 
-Important:
-- If `BRIA_HOUDINI_ROOT` is not set by launcher env and not manually replaced in the copied JSON, package paths resolve to empty and the integration will not load.
+Launch Houdini. That's it — `bria_houdini.json` at the repo root uses relative paths to find everything automatically.
 
-Optional/manual alternative (HDAs only): add `houdini/hdas` to `HOUDINI_PATH` in `houdini.env`.
-This manual route does not automatically wire shelf/panel paths like the package JSON does.
+**Studio setup:** Add the repo path to your existing `HOUDINI_PACKAGE_DIR` (colon-separated on macOS/Linux, semicolon on Windows), or place it anywhere in the `HOUDINI_PATH` under a `packages/` subdirectory.
+
+**Alternative (HDAs only):** Add `bria_houdini/houdini/hdas` to `HOUDINI_PATH` in `houdini.env`. This manual route does not automatically wire shelf/panel paths like the package JSON does.
 
 ## 2) Create the nodes
 
