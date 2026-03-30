@@ -24,65 +24,29 @@ def _mime_from_path(path: str) -> str:
 
 def _edit_base(api_endpoint: str) -> str:
     base = (api_endpoint or "").strip().rstrip("/")
-
-    # Legacy host compatibility: api.bria.ai is often stale/unresolvable.
-    if "://api.bria.ai" in base:
-        base = base.replace("://api.bria.ai", "://engine.prod.bria-api.com")
-
-    # Normalize to API host root before forcing v2 image/edit.
-    # This avoids broken combinations like: .../v1/v2/image/edit
-    root = re.split(r"/v[12](?:/.*)?$", base, maxsplit=1)[0].rstrip("/")
+    root = re.split(r"/v\d+(?:/.*)?$", base, maxsplit=1)[0].rstrip("/")
     if not root:
         root = base
-
     return root + "/v2/image/edit"
 
 
 def _erase_target(api_endpoint: str) -> tuple[str, str]:
     base = (api_endpoint or "").strip().rstrip("/")
-
     if base.endswith("/v2/image/edit/erase"):
         return base[: -len("/erase")], "erase"
-
     if base.endswith("/v2/image/edit") or base.endswith("/v2"):
         return _edit_base(base), "erase"
-
-    if base.endswith("/v1/eraser"):
-        return base[: -len("/eraser")], "eraser"
-
-    if base.endswith("/v1"):
-        return base, "eraser"
-
-    if base.endswith("/eraser"):
-        return base[: -len("/eraser")], "eraser"
-
     return _edit_base(base), "erase"
 
 
 def _rmbg_target(api_endpoint: str) -> tuple[str, str]:
     base = (api_endpoint or "").strip().rstrip("/")
-
     if base.endswith("/v2/image/edit/remove_background"):
         return base[: -len("/remove_background")], "remove_background"
-
     if base.endswith("/v2/image/edit"):
         return base, "remove_background"
-
     if base.endswith("/v2"):
         return base + "/image/edit", "remove_background"
-
-    if base.endswith("/v1/background/remove"):
-        return base[: -len("/background/remove")], "background/remove"
-
-    if base.endswith("/v1"):
-        return base, "background/remove"
-
-    if base.endswith("/background/remove"):
-        return base[: -len("/background/remove")], "background/remove"
-
-    if base.endswith("/remove_background"):
-        return base[: -len("/remove_background")], "remove_background"
-
     return base + "/v2/image/edit", "remove_background"
 
 
@@ -96,22 +60,10 @@ def _upscale_target(api_endpoint: str, mode: str) -> tuple[str, str]:
 
     if base.endswith(f"/v2/image/edit/{endpoint_name}"):
         return base[: -len(f"/{endpoint_name}")], endpoint_name
-
     if base.endswith("/v2/image/edit"):
         return base, endpoint_name
-
     if base.endswith("/v2"):
         return base + "/image/edit", endpoint_name
-
-    if base.endswith(f"/v1/{endpoint_name}"):
-        return base[: -len(f"/{endpoint_name}")], endpoint_name
-
-    if base.endswith("/v1"):
-        return base, endpoint_name
-
-    if base.endswith(f"/{endpoint_name}"):
-        return base[: -len(f"/{endpoint_name}")], endpoint_name
-
     return base + "/v2/image/edit", endpoint_name
 
 
@@ -126,58 +78,28 @@ def _generate_base(api_endpoint: str) -> str:
 
 def _expand_target(api_endpoint: str) -> tuple[str, str]:
     base = (api_endpoint or "").strip().rstrip("/")
-
     if base.endswith("/v2/image/edit/expand"):
         return base[: -len("/expand")], "expand"
-
     if base.endswith("/v2/image/edit"):
         return base, "expand"
-
     if base.endswith("/v2"):
         return base + "/image/edit", "expand"
-
-    if base.endswith("/v1/image_expansion"):
-        return base[: -len("/image_expansion")], "image_expansion"
-
-    if base.endswith("/v1"):
-        return base, "image_expansion"
-
-    if base.endswith("/image_expansion"):
-        return base[: -len("/image_expansion")], "image_expansion"
-
     return base + "/v2/image/edit", "expand"
 
 
 def _genfill_target(api_endpoint: str) -> tuple[str, str]:
     base = (api_endpoint or "").strip().rstrip("/")
-
-    # Legacy host compatibility: api.bria.ai is often stale/unresolvable.
-    if "://api.bria.ai" in base:
-        base = base.replace("://api.bria.ai", "://engine.prod.bria-api.com")
-
     if base.endswith("/v2/image/edit/gen_fill"):
         return base[: -len("/gen_fill")], "gen_fill"
-
     if base.endswith("/v2/image/edit"):
         return base, "gen_fill"
-
     if base.endswith("/v2"):
         return base + "/image/edit", "gen_fill"
-
-    if base.endswith("/v1/gen_fill"):
-        return base[: -len("/gen_fill")], "gen_fill"
-
-    if base.endswith("/gen_fill"):
-        return base[: -len("/gen_fill")], "gen_fill"
-
-    if base.endswith("/v1"):
-        return base, "gen_fill"
-
     return base + "/v2/image/edit", "gen_fill"
 
 
 def _sanitize_text_field(value: str) -> str:
-    # Bria v1/gen_fill can reject multiline/control-character text payloads.
+    # Bria gen_fill can reject multiline/control-character text payloads.
     txt = (value or "").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     txt = txt.replace("\x00", " ")
     return " ".join(txt.split()).strip()
@@ -487,9 +409,15 @@ def upscale_from_files(
         session=session,
     )
 
+    # The Bria API does not support sync mode for enhance —
+    # always use async (poll via status_url) for enhance requests.
+    use_sync = True
+    if endpoint_name == "enhance":
+        use_sync = False
+
     payload: Dict[str, object] = {
         "image": file_to_base64(image_path),
-        "sync": True,
+        "sync": use_sync,
     }
 
     if preserve_alpha is not None:

@@ -6,6 +6,7 @@ import importlib
 import json
 import logging
 import os
+import sys
 from typing import Any
 
 from bria_core.dcc import DccNodeUtils, debug_logger
@@ -196,26 +197,40 @@ def save_api_metadata(
         return None
 
 
+def _safe_exc_str(exc: Exception) -> str:
+    """Format exception without str()/repr() which can hang on hou exceptions."""
+    try:
+        return f"{type(exc).__name__}: {exc.args}"
+    except Exception:
+        return type(exc).__name__
+
+
 def apply_result_to_ui(cop_node, save_path: str, status_message: str) -> None:
     if hou is None:
         return
 
+    _ui_log = debug_logger("Bria UI")
+    _ui_log(f"apply_result_to_ui: {save_path}")
+
+    # 1. Clear texture/GL caches
     try:
         hou.hscript("texcache -c")
         hou.hscript("glcache -c")
     except Exception:
         pass
 
+    # 2. Set result_path parm
     result_parm = cop_node.parm("result_path") if cop_node is not None else None
     if result_parm is not None:
         result_parm.set(save_path)
 
-    # Unlock HDA contents so we can modify internal nodes
+    # 3. Unlock HDA contents so we can modify internal nodes
     try:
         cop_node.allowEditingOfContents()
-    except Exception:
-        pass
+    except Exception as exc:
+        _ui_log(f"allowEditingOfContents failed: {_safe_exc_str(exc)}")
 
+    # 4. Configure and load File node
     loader = cop_node.node("loader_result") if cop_node is not None else None
     if loader is not None:
         # Copernicus File node requires AOV config to load images
@@ -224,18 +239,26 @@ def apply_result_to_ui(cop_node, save_path: str, status_message: str) -> None:
         if loader.parm("aov1") is not None:
             loader.parm("aov1").set("C")
         # Try different filename parameter names (varies by Houdini version/context)
-        for pname in ("filename1", "file", "filename"):
+        for pname in ("file", "filename1", "filename"):
             fp = loader.parm(pname)
             if fp is not None:
                 fp.set(save_path)
+                _ui_log(f"loader {pname} set to {save_path}")
                 break
-        if loader.parm("reload") is not None:
-            loader.parm("reload").pressButton()
+
+        # pressButton("reload") can hang on macOS (see cop_export.py).
+        # Setting a new file path above already triggers the node to reload.
+        if sys.platform != "darwin":
+            if loader.parm("reload") is not None:
+                loader.parm("reload").pressButton()
+
         try:
             loader.cook(force=True)
-        except Exception:
-            pass
+            _ui_log("loader cook OK")
+        except Exception as exc:
+            _ui_log(f"loader cook failed: {_safe_exc_str(exc)}")
 
+    # 5. Wire switch and toggle to result
     switch = cop_node.node("switch_result") if cop_node is not None else None
     cop_outputs = cop_node.node("outputs") if cop_node is not None else None
 
@@ -244,27 +267,104 @@ def apply_result_to_ui(cop_node, save_path: str, status_message: str) -> None:
         try:
             if loader is not None:
                 switch.setInput(1, loader)
-        except Exception:
-            pass
+        except Exception as exc:
+            _ui_log(f"switch setInput failed: {_safe_exc_str(exc)}")
         # Ensure switch is wired to Copernicus outputs
         if cop_outputs is not None:
             try:
                 cop_outputs.setInput(0, None)
                 cop_outputs.setInput(0, switch)
-            except Exception:
-                pass
+            except Exception as exc:
+                _ui_log(f"outputs setInput failed: {_safe_exc_str(exc)}")
         if switch.parm("input") is not None:
             try:
                 switch.parm("input").set(1)  # input 0=pass-through, 1=result
-            except Exception:
-                pass
+            except Exception as exc:
+                _ui_log(f"switch toggle failed: {_safe_exc_str(exc)}")
     elif loader is not None and cop_outputs is not None:
         # No switch node — wire loader directly to Copernicus outputs
         try:
             cop_outputs.setInput(0, None)
             cop_outputs.setInput(0, loader)
+        except Exception as exc:
+            _ui_log(f"direct wire failed: {_safe_exc_str(exc)}")
+
+    # 6. Force cook outputs to propagate the new image through the COP pipeline
+    if cop_outputs is not None:
+        try:
+            cop_outputs.cook(force=True)
+            _ui_log("outputs cook OK")
+        except Exception as exc:
+            _ui_log(f"outputs cook failed: {_safe_exc_str(exc)}")
+        # Ensure display flag is set so viewer picks up the result
+        try:
+            cop_outputs.setDisplayFlag(True)
         except Exception:
             pass
 
+    # 7. Force viewport to notice the updated COP data
+    try:
+        hou.ui.triggerUpdate()
+    except Exception:
+        pass
+
+    # 8. Status message
     if status_message:
         hou.ui.setStatusMessage(status_message)
+
+    # 9. Open result in MPlay if the toggle is enabled.
+    # MPlay reads files from disk (no COP pixel pipeline), so it bypasses
+    # Houdini Non-Commercial watermarks and resolution limits.
+    try:
+        mplay_parm = cop_node.parm("open_in_mplay") if cop_node is not None else None
+        if mplay_parm and mplay_parm.eval():
+            from houdini.nodes.viewport_render import display_in_mplay
+            display_in_mplay(save_path)
+    except Exception:
+        pass
+
+    _ui_log("apply_result_to_ui complete")
+
+
+def store_vgl_from_response(node, data: dict) -> None:
+    """Extract structured_prompt from an API response and populate VGL fields.
+
+    The Bria generate endpoints return structured_prompt for free alongside
+    image_url.  This helper stores it on the node's ``structured_prompt``
+    parm and fills the organised VGL editor fields so the user can switch
+    to structured-prompt mode and refine without an extra API call.
+
+    Safe to call even if the response contains no structured_prompt — it
+    simply returns without touching anything.
+    """
+    import json
+
+    if not isinstance(data, dict):
+        return
+
+    result = data.get("result", {})
+    sp = result.get("structured_prompt") if isinstance(result, dict) else None
+    if sp is None:
+        sp = data.get("structured_prompt")
+    if not sp:
+        return
+
+    if isinstance(sp, dict):
+        json_str = json.dumps(sp, indent=2)
+    elif isinstance(sp, str):
+        try:
+            json_str = json.dumps(json.loads(sp), indent=2)
+        except Exception:
+            json_str = sp
+    else:
+        return
+
+    sp_parm = node.parm("structured_prompt")
+    if sp_parm:
+        sp_parm.set(json_str)
+
+    try:
+        from houdini.vgl_parms import populate_parms_from_json
+        populate_parms_from_json(node, json_str)
+    except Exception:
+        pass

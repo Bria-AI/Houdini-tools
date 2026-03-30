@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Optional
 
-_DEFAULT_LEVEL = os.getenv("BRIA_LOG_LEVEL", "INFO").upper()
+_DEFAULT_LEVEL = os.getenv("BRIA_LOG_LEVEL", "WARNING").upper()
 
 
 def configure_logging(level: Optional[str] = None) -> None:

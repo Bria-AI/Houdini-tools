@@ -15,6 +15,7 @@ import hdefereval
 from bria_core.errors import BriaConfigError, BriaRequestError
 from bria_core.utils import (
     download_url,
+    ensure_api_aspect_ratio as _ensure_api_aspect_ratio,
     extract_image_url as _extract_image_url,
     resolve_proxies,
     resolve_temp_dir,
@@ -24,6 +25,7 @@ from houdini.adapter import fibo_edit_from_files
 from houdini.cop_export import cop_to_png, export_via_internal_rop
 from houdini.vgl_parms import assemble_from_parms
 from houdini.node_utils import (
+    _safe_exc_str,
     apply_result_to_ui,
     as_hscript_path as _as_hscript_path,
     clamp_steps_num,
@@ -34,6 +36,7 @@ from houdini.node_utils import (
     resolve_output_dir,
     resolve_result_save_path,
     save_api_metadata,
+    store_vgl_from_response,
 )
 if not hasattr(hou.session, "bria_fibo_edit_session"):
     hou.session.bria_fibo_edit_session = None
@@ -206,10 +209,7 @@ def fibo_edit_bria(cop_node: hou.Node) -> None:
         use_struct = _opt_parm_bool(cop_node, "use_structured_prompt")
         enable_negative = _opt_parm_bool(cop_node, "enable_negative_prompt")
 
-        negative_prompt = (
-            (_opt_parm_str(cop_node, "negative_prompt") or "").strip()
-            or (_opt_parm_str(cop_node, "megative_prompt") or "").strip()
-        )
+        negative_prompt = (_opt_parm_str(cop_node, "negative_prompt") or "").strip()
 
         if enable_negative is False:
             negative_prompt = ""
@@ -277,6 +277,7 @@ def fibo_edit_bria(cop_node: hou.Node) -> None:
             )
 
         _validate_bria_image_file(img_path, "Input image")
+        img_path = _ensure_api_aspect_ratio(img_path)
 
         t_disk_end = time.perf_counter()
         _debug_log(f"Disk Write Overhead: {(t_disk_end - t_disk_start):.4f} sec")
@@ -368,6 +369,11 @@ def fibo_edit_bria(cop_node: hou.Node) -> None:
             "guidance_scale": guidance_scale,
         })
 
+        # Store structured_prompt from API response if present (defensive)
+        hdefereval.executeDeferred(
+            lambda node=cop_node, d=data: store_vgl_from_response(node, d)
+        )
+
         hdefereval.executeDeferred(
             lambda node=cop_node, path=save_path, total=total_time: apply_result_to_ui(
                 node,
@@ -377,13 +383,13 @@ def fibo_edit_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria FIBO Edit Error: {e}"
+        error_msg = f"Bria FIBO Edit Error: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria FIBO Edit Exception: {e}"
+        error_msg = f"Bria FIBO Edit Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

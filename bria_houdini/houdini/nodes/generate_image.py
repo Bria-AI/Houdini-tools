@@ -35,6 +35,7 @@ from houdini.node_utils import (
     resolve_output_dir,
     resolve_result_save_path,
     save_api_metadata,
+    store_vgl_from_response,
 )
 if not hasattr(hou.session, "bria_generate_image_session"):
     hou.session.bria_generate_image_session = None
@@ -225,6 +226,11 @@ def generate_image_bria(cop_node: hou.Node) -> None:
             "steps_num": steps_num,
         })
 
+        # Store structured_prompt from API response (free with every generation)
+        hdefereval.executeDeferred(
+            lambda node=cop_node, d=data: store_vgl_from_response(node, d)
+        )
+
         hdefereval.executeDeferred(
             lambda node=cop_node, path=save_path, total=total_time: apply_result_to_ui(
                 node,
@@ -234,13 +240,13 @@ def generate_image_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria Generate Image Error: {e}"
+        error_msg = f"Bria Generate Image Error: {repr(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria Generate Image Exception: {e}"
+        error_msg = f"Bria Generate Image Exception: {repr(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

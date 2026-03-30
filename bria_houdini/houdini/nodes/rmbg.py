@@ -10,6 +10,7 @@ import hou
 import hdefereval
 from bria_core.utils import (
     download_url,
+    ensure_api_aspect_ratio as _ensure_api_aspect_ratio,
     extract_image_url as _extract_image_url,
     resolve_temp_dir,
     resolve_proxies,
@@ -20,6 +21,7 @@ from bria_core.errors import BriaConfigError, BriaRequestError
 from houdini.adapter import remove_background_from_files
 from houdini.cop_export import cop_to_png, export_via_internal_rop
 from houdini.node_utils import (
+    _safe_exc_str,
     apply_result_to_ui,
     debug_logger,
     opt_parm_bool as _opt_parm_bool,
@@ -61,6 +63,7 @@ def remove_background_bria(cop_node: hou.Node) -> None:
         )
 
         _validate_bria_image_file(img_path, "Input image")
+        img_path = _ensure_api_aspect_ratio(img_path)
 
         t_disk_end = time.perf_counter()
         _debug_log(f"Disk Write Overhead: {(t_disk_end - t_disk_start):.4f} sec")
@@ -154,13 +157,13 @@ def remove_background_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria RMBG Error: {repr(e)}"
+        error_msg = f"Bria RMBG Error: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria RMBG Exception: {repr(e)}"
+        error_msg = f"Bria RMBG Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

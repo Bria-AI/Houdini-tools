@@ -19,6 +19,7 @@ from bria_core.utils import (
 from bria_core.errors import BriaConfigError, BriaRequestError
 from houdini.adapter import fibo_generate_from_payload
 from houdini.node_utils import (
+    _safe_exc_str,
     apply_result_to_ui,
     clamp_steps_num,
     debug_logger,
@@ -30,6 +31,7 @@ from houdini.node_utils import (
     resolve_output_dir,
     resolve_result_save_path,
     save_api_metadata,
+    store_vgl_from_response,
 )
 if not hasattr(hou.session, "bria_fibo_generate_session"):
     hou.session.bria_fibo_generate_session = None
@@ -204,6 +206,11 @@ def fibo_generate_bria(cop_node: hou.Node) -> None:
             "steps_num": steps_num,
         })
 
+        # Store structured_prompt from API response (free with every generation)
+        hdefereval.executeDeferred(
+            lambda node=cop_node, d=data: store_vgl_from_response(node, d)
+        )
+
         hdefereval.executeDeferred(
             lambda node=cop_node, path=save_path, total=total_time: apply_result_to_ui(
                 node,
@@ -213,13 +220,13 @@ def fibo_generate_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria FIBO Error: {e}"
+        error_msg = f"Bria FIBO Error: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria FIBO Exception: {e}"
+        error_msg = f"Bria FIBO Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

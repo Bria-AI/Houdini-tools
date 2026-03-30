@@ -17,7 +17,7 @@
     },
     {
       "HOUDINI_OTLSCAN_PATH": {
-        "value": "$HOUDINI_PACKAGE_PATH;$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/hdas;$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/hdas_legacy",
+        "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/hdas",
         "method": "prepend"
       }
     },
@@ -31,12 +31,6 @@
       "HOUDINI_PYTHON_PANEL_PATH": {
         "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/python_panels",
         "method": "prepend"
-      }
-    },
-    {
-      "SSL_CERT_FILE": {
-        "value": "/etc/ssl/cert.pem",
-        "method": "replace"
       }
     }
   ]

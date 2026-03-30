@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict
 
 from .errors import BriaAuthError
+from .version import __version__
 
 
 def build_headers(api_key: str, use_bearer: bool = False) -> Dict[str, str]:
@@ -14,6 +15,7 @@ def build_headers(api_key: str, use_bearer: bool = False) -> Dict[str, str]:
 
     token = str(api_key).split("#")[0].strip()
     headers = {"Content-Type": "application/json"}
+    headers["User-Agent"] = f"BriaHoudini/{__version__}"
 
     if token.lower().startswith("bearer "):
         headers["Authorization"] = token

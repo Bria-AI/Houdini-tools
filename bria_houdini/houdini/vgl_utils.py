@@ -1,4 +1,4 @@
-"""VGL (Visual Generation Language) structured prompt utilities.
+"""VGL (Visual GenAI Language) structured prompt utilities.
 
 Parse VGL JSON into category sections for editing, and reassemble
 edited categories back into a full VGL JSON for the API.

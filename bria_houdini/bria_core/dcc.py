@@ -24,9 +24,15 @@ class DccNodeUtils(Protocol):
 
 
 def debug_logger(prefix: str, sink: Callable[[str], None] | None = None) -> Callable[[str], None]:
-    out = sink or print
+    if sink is not None:
+        def _log_sink(msg: str) -> None:
+            sink(f"[{prefix}] {msg}")
+        return _log_sink
+
+    import logging
+    _logger = logging.getLogger(f"bria.{prefix.replace(' ', '_').lower()}")
 
     def _log(msg: str) -> None:
-        out(f"[{prefix}] {msg}")
+        _logger.info("[%s] %s", prefix, msg)
 
     return _log

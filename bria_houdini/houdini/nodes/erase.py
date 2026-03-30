@@ -10,6 +10,7 @@ import hou
 import hdefereval
 from bria_core.utils import (
     download_url,
+    ensure_api_aspect_ratio as _ensure_api_aspect_ratio,
     extract_image_url as _extract_image_url,
     resolve_temp_dir,
     resolve_proxies,
@@ -20,6 +21,7 @@ from bria_core.errors import BriaConfigError, BriaRequestError
 from houdini.adapter import erase_from_files
 from houdini.cop_export import cop_to_png, export_via_internal_rop
 from houdini.node_utils import (
+    _safe_exc_str,
     apply_result_to_ui,
     debug_logger,
     opt_parm_bool as _opt_parm_bool,
@@ -54,9 +56,9 @@ def erase_bria(cop_node: hou.Node) -> None:
 
         t_disk_start = time.perf_counter()
 
-        if input_op is None:
+        if input_op is None or mask_op is None:
             hou.ui.setStatusMessage(
-                "Connect image to input 1",
+                "Connect image to input 1 and mask to input 2",
                 severity=hou.severityType.Error,
             )
             return
@@ -66,29 +68,20 @@ def erase_bria(cop_node: hou.Node) -> None:
             or cop_to_png(input_op, img_path)
         )
         _validate_bria_image_file(img_path, "Input image")
+        img_path = _ensure_api_aspect_ratio(img_path)
 
         # --- Read parameters ---
-        mask_type = _opt_parm_menu_str(cop_node, "mask_type") or "manual"
         preserve_alpha = _opt_parm_bool(cop_node, "preserve_alpha")
         seed = _opt_parm_int(cop_node, "seed")
         content_mod_input = _opt_parm_bool(cop_node, "content_moderation_input")
         content_mod_output = _opt_parm_bool(cop_node, "content_moderation_output")
 
-        # Export mask only for manual mode
-        actual_mask_path = None
-        if mask_type == "manual":
-            if mask_op is None:
-                hou.ui.setStatusMessage(
-                    "Connect mask to input 2 (or switch to Automatic mask mode)",
-                    severity=hou.severityType.Error,
-                )
-                return
-            mask_path = (
-                export_via_internal_rop(cop_node, "rop_save_mask", mask_path)
-                or cop_to_png(mask_op, mask_path)
-            )
-            _validate_bria_image_file(mask_path, "Mask")
-            actual_mask_path = mask_path
+        # Export mask from input 2
+        mask_path = (
+            export_via_internal_rop(cop_node, "rop_save_mask", mask_path)
+            or cop_to_png(mask_op, mask_path)
+        )
+        _validate_bria_image_file(mask_path, "Mask")
 
         t_disk_end = time.perf_counter()
         _debug_log(f"Disk Write Overhead: {(t_disk_end - t_disk_start):.4f} sec")
@@ -117,8 +110,7 @@ def erase_bria(cop_node: hou.Node) -> None:
         # --- Call API ---
         data = erase_from_files(
             image_path=img_path,
-            mask_path=actual_mask_path,
-            mask_type=mask_type,
+            mask_path=mask_path,
             preserve_alpha=bool(preserve_alpha) if preserve_alpha is not None else True,
             seed=seed,
             content_moderation_input=content_mod_input,
@@ -161,7 +153,6 @@ def erase_bria(cop_node: hou.Node) -> None:
             "download_time": round(dl_time, 4),
             "total_time": round(total_time, 4),
         }, request_params={
-            "mask_type": mask_type,
             "seed": seed,
         })
 
@@ -174,13 +165,13 @@ def erase_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria Erase Error: {repr(e)}"
+        error_msg = f"Bria Erase Error: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria Erase Exception: {repr(e)}"
+        error_msg = f"Bria Erase Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

@@ -18,6 +18,7 @@ import hdefereval
 from bria_core.errors import BriaConfigError, BriaRequestError
 from bria_core.utils import (
     download_url,
+    ensure_api_aspect_ratio as _ensure_api_aspect_ratio,
     extract_image_url as _extract_image_url,
     resolve_proxies,
     resolve_temp_dir,
@@ -27,6 +28,7 @@ from houdini.adapter import fibo_edit_from_files
 from houdini.cop_export import cop_to_png, export_via_internal_rop
 from houdini.vgl_parms import assemble_from_parms
 from houdini.node_utils import (
+    _safe_exc_str,
     apply_result_to_ui,
     clamp_steps_num,
     debug_logger,
@@ -37,6 +39,7 @@ from houdini.node_utils import (
     resolve_output_dir,
     resolve_result_save_path,
     save_api_metadata,
+    store_vgl_from_response,
 )
 if not hasattr(hou.session, "bria_fibo_edit_recipes_session"):
     hou.session.bria_fibo_edit_recipes_session = None
@@ -56,9 +59,358 @@ CATEGORY_ORDER = [
     ("camera",       "Camera"),
     ("lighting",     "Lighting"),
     ("compositing",  "Compositing"),
-    ("clean",        "Clean / Artifacts"),
-    ("object_edits", "Object Edits"),
+    ("clean",           "Clean / Artifacts"),
+    ("ai_corrections",  "AI Corrections"),
+    ("object_edits",    "Object Edits"),
 ]
+
+# ---------------------------------------------------------------------------
+# Object-targeting presets: structured constraint backbones
+# ---------------------------------------------------------------------------
+TARGETED_OBJECT_PRESETS = frozenset({
+    "delete_object", "replace_object", "change_object_color", "change_object_material",
+})
+
+# Action sentence templates per preset.
+# {obj1} = single object name, {mod1} = single modifier (replacement/color/material)
+# {obj_list} = comma-separated object names
+# {obj_mod_list} = semicolon-separated "object to modifier" pairs
+_OBJ_ACTIONS = {
+    "delete_object": {
+        "fallback": "Delete the specified object from the scene.",
+        "single": "Delete {obj1} from the scene.",
+        "multi": "Delete the following objects from the scene: {obj_list}.",
+    },
+    "replace_object": {
+        "fallback": "Replace the specified object with the described replacement.",
+        "single": "Replace {obj1} with {mod1}.",
+        "multi": "Replace the following objects: {obj_mod_list}.",
+    },
+    "change_object_color": {
+        "fallback": "Change the color of the specified object to the described color.",
+        "single": "Change the color of {obj1} to {mod1}.",
+        "multi": "Change the colors of the following objects: {obj_mod_list}.",
+    },
+    "change_object_material": {
+        "fallback": "Change the material of the specified object to the described material.",
+        "single": "Change the material of {obj1} to {mod1}.",
+        "multi": "Change the materials of the following objects: {obj_mod_list}.",
+    },
+}
+
+# Structured constraint body per preset (after the action sentence)
+_OBJ_BODIES = {
+    "delete_object": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "Do NOT move, warp, scale, rotate, or reshape any remaining objects.\n"
+        "Do NOT change the overall color grade, lighting, or artistic style.\n"
+        "Do NOT alter any objects other than those specified for deletion.\n"
+        "Scope of work:\n"
+        "Completely remove the specified object(s) from the scene.\n"
+        "Seamlessly inpaint the revealed area behind each deleted object, reconstructing the background naturally.\n"
+        "Match the inpainted region's texture, lighting, and perspective to the surrounding scene.\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to the deleted object(s) and the area directly behind them.\n"
+        "Do NOT remove or modify any other objects in the scene.\n"
+        "Do NOT change the background outside the inpainted regions.\n"
+        "The inpainted area must be indistinguishable from the original background.\n"
+        "Result requirement:\n"
+        "The output should appear as if the deleted object(s) were never present. "
+        "If the specified object cannot be identified, return the image unchanged."
+    ),
+    "replace_object": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects other than the one(s) being replaced.\n"
+        "Do NOT change the overall color grade, lighting direction, or artistic style.\n"
+        "Do NOT alter the background or surrounding scene elements.\n"
+        "Scope of work:\n"
+        "Remove the specified object(s) and place the described replacement(s) in the same position.\n"
+        "Match the replacement's lighting, perspective, scale, and shadow to the scene.\n"
+        "Blend the replacement naturally into the surrounding environment.\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to the replaced object(s) and their immediate surroundings.\n"
+        "The replacement must occupy approximately the same spatial footprint as the original.\n"
+        "Do NOT change any other objects or scene elements.\n"
+        "Preserve the scene's existing lighting direction and shadow behavior.\n"
+        "Result requirement:\n"
+        "The output should appear as if the replacement object(s) were always part of the original scene. "
+        "If the specified object cannot be identified, return the image unchanged."
+    ),
+    "change_object_color": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change the overall color grade, lighting, or artistic style.\n"
+        "Do NOT alter any objects other than those specified for color change.\n"
+        "Scope of work:\n"
+        "Change only the color of the specified object(s) to the described target color(s).\n"
+        "Preserve each object's shape, texture detail, material properties, and surface finish.\n"
+        "Maintain correct lighting response — highlights, shadows, and reflections should adapt naturally to the new color.\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to the surface color of the specified object(s).\n"
+        "Do NOT change the object's shape, texture pattern, or material type.\n"
+        "Do NOT affect the background or any other objects.\n"
+        "Do NOT alter the scene's lighting or shadows beyond natural color-dependent changes.\n"
+        "Result requirement:\n"
+        "The output should appear as if the object(s) were always the target color, with natural lighting response. "
+        "If the specified object cannot be identified, return the image unchanged."
+    ),
+    "change_object_material": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change the overall color grade, lighting direction, or artistic style.\n"
+        "Do NOT alter any objects other than those specified for material change.\n"
+        "Scope of work:\n"
+        "Change only the material and surface texture of the specified object(s) to the described target material(s).\n"
+        "Preserve each object's shape and silhouette exactly.\n"
+        "Apply correct material properties — reflectivity, roughness, transparency, and texture pattern appropriate to the new material.\n"
+        "Maintain natural lighting response for the new material.\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to the surface material of the specified object(s).\n"
+        "Do NOT change the object's shape, size, or position.\n"
+        "Do NOT affect the background or any other objects.\n"
+        "Lighting and shadow changes should only reflect the new material's natural properties.\n"
+        "Result requirement:\n"
+        "The output should appear as if the object(s) were always made of the target material, with correct surface properties. "
+        "If the specified object cannot be identified, return the image unchanged."
+    ),
+}
+
+
+def _obj_fallback_prompt(key: str) -> str:
+    """Build the default structured prompt for an object preset (no objects specified)."""
+    return _OBJ_ACTIONS[key]["fallback"] + "\n" + _OBJ_BODIES[key]
+
+
+# ---------------------------------------------------------------------------
+# Compositing-element-targeting presets: structured constraint backbones
+# ---------------------------------------------------------------------------
+TARGETED_COMP_PRESETS = frozenset({
+    "harmonize_lighting", "match_shadows", "blend_edges", "color_harmonize",
+    "fix_reflections", "integrate_elements", "match_ambient",
+})
+
+# Action sentence templates per compositing preset.
+# {elem1} = single element description
+# {elem_list} = comma-separated element descriptions
+_COMP_ACTIONS = {
+    "harmonize_lighting": {
+        "fallback": "Perform a targeted lighting harmonization pass on this composite image.",
+        "single": "Perform a targeted lighting harmonization pass on this composite image, focusing on {elem1}.",
+        "multi": "Perform a targeted lighting harmonization pass on this composite image, focusing on the following composited elements: {elem_list}.",
+    },
+    "match_shadows": {
+        "fallback": "Perform a targeted shadow correction pass on this composite image.",
+        "single": "Perform a targeted shadow correction pass on this composite image, focusing on {elem1}.",
+        "multi": "Perform a targeted shadow correction pass on this composite image, focusing on the following composited elements: {elem_list}.",
+    },
+    "blend_edges": {
+        "fallback": "Perform a targeted edge blending pass on this composite image.",
+        "single": "Perform a targeted edge blending pass on this composite image, focusing on the edges of {elem1}.",
+        "multi": "Perform a targeted edge blending pass on this composite image, focusing on the edges of the following composited elements: {elem_list}.",
+    },
+    "color_harmonize": {
+        "fallback": "Perform a targeted color harmonization pass on this composite image.",
+        "single": "Perform a targeted color harmonization pass on this composite image, focusing on {elem1}.",
+        "multi": "Perform a targeted color harmonization pass on this composite image, focusing on the following composited elements: {elem_list}.",
+    },
+    "fix_reflections": {
+        "fallback": "Perform a targeted reflection correction pass on this composite image.",
+        "single": "Perform a targeted reflection correction pass on this composite image, focusing on reflections of {elem1}.",
+        "multi": "Perform a targeted reflection correction pass on this composite image, focusing on reflections of the following composited elements: {elem_list}.",
+    },
+    "integrate_elements": {
+        "fallback": "Perform a targeted compositing cleanup pass on the image.",
+        "single": "Perform a targeted compositing cleanup pass on this image, focusing on {elem1}.",
+        "multi": "Perform a targeted compositing cleanup pass on this image, focusing on the following composited elements: {elem_list}.",
+    },
+    "match_ambient": {
+        "fallback": "Perform a targeted ambient light matching pass on this composite image.",
+        "single": "Perform a targeted ambient light matching pass on this composite image, focusing on {elem1}.",
+        "multi": "Perform a targeted ambient light matching pass on this composite image, focusing on the following composited elements: {elem_list}.",
+    },
+}
+
+# Structured constraint body per compositing preset (after the action sentence)
+_COMP_BODIES = {
+    "harmonize_lighting": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change the overall color grade or artistic style.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify regions where composited elements have inconsistent lighting compared to the scene, including:\n"
+        "- light direction mismatch (highlights/shadows facing wrong way)\n"
+        "- intensity mismatch (element too bright or too dark for the scene)\n"
+        "- color temperature mismatch (warm element in cool scene or vice versa)\n"
+        "- missing or incorrect light falloff on composited objects\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- adjust highlight and shadow placement on affected elements to match scene light direction\n"
+        "- correct brightness/exposure ONLY on mismatched elements to blend with surroundings\n"
+        "- shift color temperature ONLY on affected elements to match the scene's dominant light\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to composited elements that show lighting inconsistency.\n"
+        "Do NOT re-light the entire scene or change the background lighting.\n"
+        "Do NOT add new light sources or remove existing ones.\n"
+        "Do NOT alter textures, materials, or shapes.\n"
+        "Result requirement:\n"
+        "The output should appear as if all elements were photographed under the same lighting conditions. If no lighting issues are detected, return the image unchanged."
+    ),
+    "match_shadows": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change global lighting, color balance, or overall image appearance.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify regions where composited elements have incorrect or missing shadows, including:\n"
+        "- shadow direction inconsistent with the scene's primary light source\n"
+        "- missing contact shadows where objects meet surfaces\n"
+        "- shadow softness/hardness not matching the scene's light quality\n"
+        "- shadow density too strong or too weak relative to scene shadows\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- add or reposition contact shadows at object bases to match scene light direction\n"
+        "- adjust shadow softness to match the scene's diffusion level\n"
+        "- correct shadow density/opacity to be consistent with existing scene shadows\n"
+        "- blend shadow edges naturally into the ground plane\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to shadow regions of composited elements.\n"
+        "Do NOT modify the objects themselves, only their shadows.\n"
+        "Do NOT change scene lighting or add new light sources.\n"
+        "Do NOT affect areas that already have correct shadows.\n"
+        "Result requirement:\n"
+        "The output should have consistent shadow behavior across all elements as if lit by the same source. If no shadow issues are detected, return the image unchanged."
+    ),
+    "blend_edges": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change global lighting, shadows, or color balance.\n"
+        "Do NOT modify the overall image appearance or grade.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify regions where composited elements have visible edge artifacts, including:\n"
+        "- hard cutout edges with aliasing or jagged pixels\n"
+        "- visible halos, fringing, or matte lines around composited objects\n"
+        "- unnatural sharp boundaries between foreground elements and background\n"
+        "- color spill or edge contamination from the original background\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- soften and anti-alias hard edges to remove visible matte lines\n"
+        "- remove halos and fringing artifacts along element boundaries\n"
+        "- gently blend transitions between foreground edges and background\n"
+        "- clean color spill at edges to match adjacent background pixels\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to the edge regions of composited elements (within a few pixels of boundaries).\n"
+        "Do NOT affect the interior of any element or the background.\n"
+        "Do NOT blur or soften the overall image.\n"
+        "Do NOT change the shape or silhouette of any object.\n"
+        "Result requirement:\n"
+        "The output should have clean, natural-looking edges on all composited elements with no visible cutout artifacts. If no edge issues are detected, return the image unchanged."
+    ),
+    "color_harmonize": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change the lighting direction, shadow placement, or overall exposure.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify composited elements whose color characteristics do not match the scene, including:\n"
+        "- color temperature mismatch (element shot under different lighting than the background)\n"
+        "- saturation mismatch (element more or less saturated than surroundings)\n"
+        "- contrast curve mismatch (element has different tonal range than scene)\n"
+        "- overall color cast inconsistency between elements and background\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- shift color temperature of affected elements to match the scene's dominant color\n"
+        "- adjust saturation ONLY on mismatched elements to blend with surroundings\n"
+        "- match contrast and tonal curve of elements to the background's tonal range\n"
+        "- remove conflicting color casts from composited elements\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to composited elements that show color inconsistency.\n"
+        "Do NOT apply a new color grade to the entire image.\n"
+        "Do NOT change the background's color characteristics.\n"
+        "Do NOT alter textures, materials, or object identity.\n"
+        "Result requirement:\n"
+        "The output should appear as if all elements share the same color environment and were captured in the same scene. If no color issues are detected, return the image unchanged."
+    ),
+    "fix_reflections": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change global lighting, shadows, or color balance.\n"
+        "Do NOT modify the overall image appearance or grade.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify regions where composited elements are missing reflections or have incorrect reflections on nearby reflective surfaces, including:\n"
+        "- missing reflections on water, glass, polished floors, or metal surfaces\n"
+        "- reflection angle inconsistent with the object's position and the camera\n"
+        "- reflection intensity or blur not matching the surface's reflective properties\n"
+        "- reflection color not matching the reflected object\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- add subtle reflections where composited objects meet reflective surfaces\n"
+        "- adjust existing reflections to match correct angle and perspective\n"
+        "- match reflection blur and intensity to the surface's material properties\n"
+        "- ensure reflection color and brightness are consistent with the scene\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to reflective surface areas near composited elements.\n"
+        "Do NOT add reflections to non-reflective surfaces.\n"
+        "Do NOT modify the objects themselves, only their reflections.\n"
+        "Do NOT change the reflective surface's material or appearance.\n"
+        "Result requirement:\n"
+        "The output should have consistent reflection behavior for all composited elements on nearby reflective surfaces. If no reflection issues are detected, return the image unchanged."
+    ),
+    "integrate_elements": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change global lighting, shadows, or color balance.\n"
+        "Do NOT modify the overall image appearance or grade.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify small regions where elements appear poorly composited, including:\n"
+        "- edge artifacts (aliasing, halos, fringing, cutout edges)\n"
+        "- minor color mismatch against immediate surroundings\n"
+        "- slight exposure or contrast mismatch\n"
+        "- missing or weak contact grounding at object boundaries\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- clean and soften edges to remove visible matte lines\n"
+        "- subtly adjust color/exposure ONLY within affected elements to match adjacent pixels\n"
+        "- add or refine very subtle contact shadowing only at object boundaries if clearly missing\n"
+        "- gently blend transitions between foreground and background\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to small, specific regions.\n"
+        "Do NOT affect large areas of the image.\n"
+        "Do NOT introduce new lighting, new shadows, or re-light the scene.\n"
+        "Do NOT change textures, materials, or shapes.\n"
+        "Do NOT enhance or stylize \u2014 this is a corrective pass only.\n"
+        "Result requirement:\n"
+        "The output should appear almost identical to the original image, with only subtle fixes visible upon close inspection. If no issues are detected, return the image unchanged."
+    ),
+    "match_ambient": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "The image must remain pixel-identical in layout and composition.\n"
+        "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+        "Do NOT change the primary directional lighting or shadow placement.\n"
+        "Do NOT modify the overall image grade or artistic style.\n"
+        "Scope of work (local fixes only):\n"
+        "Identify composited elements whose ambient illumination does not match the scene, including:\n"
+        "- shadow regions too dark or too light compared to scene's ambient fill\n"
+        "- missing environmental bounce light that the scene provides\n"
+        "- ambient color in shadow areas not matching the scene's ambient color (e.g., blue sky fill, warm ground bounce)\n"
+        "- overall ambient exposure level on element inconsistent with surroundings\n"
+        "Apply ONLY minimal, localized corrections:\n"
+        "- adjust shadow fill brightness on affected elements to match scene's ambient level\n"
+        "- tint ambient/shadow areas of elements to match the scene's environmental color\n"
+        "- add subtle bounce light influence where the scene clearly provides it\n"
+        "- balance ambient-to-direct light ratio on elements to match surroundings\n"
+        "CRITICAL RULES:\n"
+        "All edits must be confined to ambient/fill regions of composited elements.\n"
+        "Do NOT change the direct/key lighting on any element.\n"
+        "Do NOT alter the background's ambient characteristics.\n"
+        "Do NOT change the overall exposure or brightness of the image.\n"
+        "Result requirement:\n"
+        "The output should have consistent ambient illumination across all elements as if they exist in the same environment. If no ambient mismatch is detected, return the image unchanged."
+    ),
+}
+
+
+def _comp_fallback_prompt(key: str) -> str:
+    """Build the default structured prompt for a compositing preset (no elements specified)."""
+    return _COMP_ACTIONS[key]["fallback"] + "\n" + _COMP_BODIES[key]
+
 
 PRESET_CATEGORIES = {
     # ---- Style (18) ----
@@ -213,36 +565,227 @@ PRESET_CATEGORIES = {
          "Remove chromatic aberration and color fringing along high-contrast edges for cleaner optical accuracy throughout the image"),
     ],
 
+    # ---- AI Corrections (8) ----
+    "ai_corrections": [
+        ("fix_face", "Fix Face Distortion",
+         "Correct facial distortions in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the person's identity, expression, or apparent age.\n"
+         "Do NOT alter the image composition, background, or non-facial elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct facial generation artifacts, including:\n"
+         "- asymmetrical or misaligned facial features (eyes, nose, mouth, ears)\n"
+         "- warped or melted facial geometry\n"
+         "- unnatural facial proportions (too wide, too narrow, misshapen)\n"
+         "- duplicated or blended facial features\n"
+         "- uncanny valley smoothness or plasticity in facial structure\n"
+         "Apply corrections that restore natural human facial anatomy while preserving the intended appearance.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the face and immediate surrounding area.\n"
+         "Do NOT alter clothing, body, hands, or background.\n"
+         "Do NOT change hairstyle, hair color, or facial hair.\n"
+         "Preserve the person's apparent identity, gender, ethnicity, and age.\n"
+         "Result requirement:\n"
+         "The output should have natural, anatomically correct facial features that look like a real photograph. If no facial distortions are detected, return the image unchanged."),
+        ("fix_eyes", "Fix Eyes",
+         "Correct eye-related defects in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the person's identity, expression, or eye color.\n"
+         "Do NOT alter the image composition, background, or non-eye elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct eye generation artifacts, including:\n"
+         "- crossed eyes or misaligned gaze direction\n"
+         "- pupils pointing in different directions\n"
+         "- uneven eye size or shape between left and right\n"
+         "- deformed eyelids, missing eyelashes, or distorted eye sockets\n"
+         "- unnatural iris patterns or reflections\n"
+         "- extra or merged eyes\n"
+         "Apply corrections that restore natural, aligned eye anatomy with consistent gaze direction.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the eye region (eyes, eyelids, eyebrows).\n"
+         "Do NOT alter facial structure, nose, mouth, or other features.\n"
+         "Preserve the person's eye color, apparent gaze intent, and expression.\n"
+         "Both eyes should appear to look in a consistent, natural direction.\n"
+         "Result requirement:\n"
+         "The output should have natural, symmetrical eyes with aligned gaze that look like a real photograph. If no eye defects are detected, return the image unchanged."),
+        ("fix_hands", "Fix Hands & Fingers",
+         "Correct hand and finger anatomy errors in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the hand pose, gesture intent, or position in the scene.\n"
+         "Do NOT alter the image composition, background, or non-hand elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct hand generation artifacts, including:\n"
+         "- wrong finger count (more or fewer than five per hand)\n"
+         "- fused, split, or duplicated fingers\n"
+         "- fingers bending in anatomically impossible directions\n"
+         "- twisted or malformed joints and knuckles\n"
+         "- unnatural finger length ratios or hand proportions\n"
+         "- missing or extra thumbs\n"
+         "Apply corrections that restore natural human hand anatomy with five fingers per hand and correct joint articulation.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the hands, fingers, and wrists.\n"
+         "Do NOT alter arms, clothing, or any other body parts.\n"
+         "Preserve the intended hand pose and gesture as closely as possible.\n"
+         "Each hand must have exactly five fingers with natural proportions.\n"
+         "Result requirement:\n"
+         "The output should have anatomically correct hands with proper finger count, natural joint angles, and realistic proportions. If no hand defects are detected, return the image unchanged."),
+        ("fix_teeth_mouth", "Fix Teeth & Mouth",
+         "Correct teeth and mouth defects in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the person's expression, smile intent, or facial identity.\n"
+         "Do NOT alter the image composition, background, or non-mouth elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct mouth and dental generation artifacts, including:\n"
+         "- too many or too few teeth\n"
+         "- misaligned, overlapping, or impossibly arranged teeth\n"
+         "- distorted jaw shape or asymmetric mouth\n"
+         "- unnatural gum exposure or gum texture\n"
+         "- blurred or melted lip boundaries\n"
+         "- teeth that appear fused, floating, or duplicated\n"
+         "Apply corrections that restore natural dental and mouth anatomy consistent with the person's expression.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the mouth, lips, teeth, and jaw region.\n"
+         "Do NOT alter the rest of the face, nose, eyes, or other features.\n"
+         "Preserve the intended expression (smile, open mouth, etc.).\n"
+         "Teeth should appear natural and properly aligned.\n"
+         "Result requirement:\n"
+         "The output should have natural-looking teeth and mouth anatomy appropriate to the expression. If no mouth defects are detected, return the image unchanged."),
+        ("fix_body_anatomy", "Fix Body Anatomy",
+         "Correct body anatomy errors in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the person's pose intent, clothing, or position in the scene.\n"
+         "Do NOT alter the image composition, background, or facial features.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct body generation artifacts, including:\n"
+         "- limbs bending in anatomically impossible directions\n"
+         "- extra or missing limbs\n"
+         "- unnatural body proportions (too long, too short, mismatched segments)\n"
+         "- twisted torso or impossible body contortions\n"
+         "- joints appearing in wrong locations\n"
+         "- body parts clipping through each other or through clothing\n"
+         "Apply corrections that restore natural human body anatomy while preserving the intended pose.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the body anatomy regions showing defects.\n"
+         "Do NOT alter the face, background, or overall scene.\n"
+         "Preserve clothing, accessories, and the intended pose as closely as possible.\n"
+         "Body proportions should follow natural human anatomy.\n"
+         "Result requirement:\n"
+         "The output should have anatomically plausible body proportions and joint articulation. If no body anatomy errors are detected, return the image unchanged."),
+        ("fix_skin_texture", "Fix Skin Texture",
+         "Correct unnatural skin texture in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the person's identity, features, or skin tone.\n"
+         "Do NOT alter the image composition, background, or non-skin elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct skin texture generation artifacts, including:\n"
+         "- waxy or plastic-looking skin surface\n"
+         "- uncanny valley over-smoothing with no visible pores or texture\n"
+         "- inconsistent skin texture between adjacent areas\n"
+         "- artificial-looking skin sheen or reflectivity\n"
+         "- patchy or blotchy texture transitions\n"
+         "- skin that appears painted or airbrushed rather than photographic\n"
+         "Apply corrections that restore natural photographic skin texture with appropriate pore detail, subtle imperfections, and realistic surface quality.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to visible skin surfaces.\n"
+         "Do NOT alter clothing, hair, background, or facial features/structure.\n"
+         "Preserve the person's skin tone, freckles, and natural markings.\n"
+         "Do NOT add blemishes \u2014 aim for natural but clean skin texture.\n"
+         "Result requirement:\n"
+         "The output should have realistic photographic skin texture that avoids the plastic or waxy AI look. If no skin texture issues are detected, return the image unchanged."),
+        ("fix_hair", "Fix Hair",
+         "Correct hair generation artifacts in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the hairstyle, hair color, or hair length.\n"
+         "Do NOT alter the image composition, background, or non-hair elements.\n"
+         "Do NOT change the overall color grade, lighting, or artistic style.\n"
+         "Scope of work:\n"
+         "Identify and correct hair generation artifacts, including:\n"
+         "- floating or disconnected hair strands\n"
+         "- hair clumps that merge into solid masses without strand detail\n"
+         "- unnatural growth direction or impossible hair physics\n"
+         "- hair texture that abruptly changes between regions\n"
+         "- hair clipping through face, ears, or clothing\n"
+         "- bald patches or missing hair in areas that should have coverage\n"
+         "Apply corrections that restore natural hair texture, strand detail, and consistent growth patterns.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to the hair and immediate hairline region.\n"
+         "Do NOT alter the face, ears, clothing, or background.\n"
+         "Preserve the intended hairstyle, color, and overall silhouette.\n"
+         "Hair should show natural strand variation and consistent texture.\n"
+         "Result requirement:\n"
+         "The output should have natural-looking hair with consistent texture and realistic strand detail. If no hair artifacts are detected, return the image unchanged."),
+        ("fix_background_coherence", "Fix Background Coherence",
+         "Correct background coherence errors in this AI-generated image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "Do NOT change the foreground subjects, people, or main elements.\n"
+         "Do NOT alter the overall color grade, lighting direction, or artistic style.\n"
+         "Do NOT move, resize, or reposition any foreground objects.\n"
+         "Scope of work:\n"
+         "Identify and correct background generation artifacts, including:\n"
+         "- repeating or tiling patterns that break spatial logic\n"
+         "- impossible geometry (stairs to nowhere, walls that don't connect, floating structures)\n"
+         "- perspective inconsistencies (vanishing points that don't align)\n"
+         "- objects that abruptly cut off, merge, or duplicate\n"
+         "- text or signage that appears garbled or nonsensical\n"
+         "- seamless blending artifacts where background regions were stitched together\n"
+         "Apply corrections that restore spatial coherence and logical consistency in the background.\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to background regions showing coherence issues.\n"
+         "Do NOT alter foreground subjects, people, or primary objects.\n"
+         "Preserve the intended scene type, setting, and atmosphere.\n"
+         "Corrections should make the background appear naturally photographed.\n"
+         "Result requirement:\n"
+         "The output should have a spatially coherent background with consistent perspective and no impossible geometry. If no background coherence issues are detected, return the image unchanged."),
+    ],
+
     # ---- Compositing (8) ----
     "compositing": [
-        ("harmonize_lighting", "Harmonize Lighting",
-         "Harmonize the lighting across all elements in this composite so that light direction, intensity, color temperature, and falloff are consistent throughout the scene"),
-        ("match_shadows", "Match Shadows",
-         "Add or correct shadows for all composited elements so shadow direction, softness, density, and ground contact are consistent with the scene's primary light source"),
-        ("blend_edges", "Blend Edges",
-         "Soften and blend the hard edges of composited elements into the surrounding scene with natural feathering, anti-aliasing, and seamless edge transitions"),
-        ("color_harmonize", "Color Harmonize",
-         "Unify the color palette across all composited elements by matching color temperature, saturation, contrast curve, and overall color grading to the background environment"),
-        ("fix_reflections", "Fix Reflections",
-         "Add or correct reflections for composited objects on nearby reflective surfaces such as water, glass, polished floors, or metal, matching the scene's reflection behavior"),
-        ("integrate_elements", "Integrate Elements",
-         "Seamlessly integrate all composited elements into the scene by harmonizing lighting, shadows, reflections, edges, color grading, and atmospheric perspective to match the environment"),
-        ("match_ambient", "Match Ambient Light",
-         "Adjust the ambient light and environmental fill on composited elements to match the scene's overall ambient illumination, bounce light, and atmospheric color"),
+        ("harmonize_lighting", "Harmonize Lighting", _comp_fallback_prompt("harmonize_lighting")),
+        ("match_shadows", "Match Shadows", _comp_fallback_prompt("match_shadows")),
+        ("blend_edges", "Blend Edges", _comp_fallback_prompt("blend_edges")),
+        ("color_harmonize", "Color Harmonize", _comp_fallback_prompt("color_harmonize")),
+        ("fix_reflections", "Fix Reflections", _comp_fallback_prompt("fix_reflections")),
+        ("integrate_elements", "Integrate Elements", _comp_fallback_prompt("integrate_elements")),
+        ("match_ambient", "Match Ambient Light", _comp_fallback_prompt("match_ambient")),
         ("depth_consistency", "Depth Consistency",
-         "Apply consistent depth cues across composited elements including atmospheric haze, focus falloff, scale, and contrast reduction to match the scene's spatial depth"),
+         "Perform a targeted depth consistency pass on this composite image.\n"
+         "STRICT LOCKS (non-negotiable):\n"
+         "The image must remain pixel-identical in layout and composition.\n"
+         "Do NOT move, warp, scale, rotate, or reshape any objects.\n"
+         "Do NOT change global lighting, shadows, or color balance.\n"
+         "Do NOT modify the overall image appearance or grade.\n"
+         "Scope of work (local fixes only):\n"
+         "Identify composited elements whose depth cues are inconsistent with their position in the scene, including:\n"
+         "- element too sharp or too soft for its apparent distance from the camera\n"
+         "- missing atmospheric haze or aerial perspective for distant elements\n"
+         "- contrast and saturation not reduced appropriately for depth\n"
+         "- scale inconsistency suggesting wrong depth placement\n"
+         "Apply ONLY minimal, localized corrections:\n"
+         "- apply subtle focus softening to elements that should appear farther from the camera\n"
+         "- add gentle atmospheric haze or desaturation to distant composited elements\n"
+         "- reduce contrast slightly on far elements to match the scene's depth falloff\n"
+         "- sharpen near elements that appear too soft for their position\n"
+         "CRITICAL RULES:\n"
+         "All edits must be confined to composited elements that show depth inconsistency.\n"
+         "Do NOT apply depth-of-field blur to the entire image.\n"
+         "Do NOT change the background's existing depth characteristics.\n"
+         "Do NOT modify the position or scale of any objects.\n"
+         "Result requirement:\n"
+         "The output should have consistent depth cues across all elements matching their spatial position in the scene. If no depth issues are detected, return the image unchanged."),
     ],
 
     # ---- Object Edits (12) ----
     "object_edits": [
-        ("delete_object", "Delete Object",
-         "Delete the specified object from the scene and seamlessly inpaint the area behind it, reconstructing the background naturally without leaving visible traces"),
-        ("replace_object", "Replace Object",
-         "Replace the specified object with the described replacement, matching the scene's lighting, perspective, scale, and visual style so the new object integrates naturally"),
-        ("change_object_color", "Change Object Color",
-         "Change the color of the specified object to the described color while preserving its shape, texture, material properties, lighting response, and all surrounding scene elements"),
-        ("change_object_material", "Change Object Material",
-         "Change the material or surface texture of the specified object to the described material while preserving its shape, lighting integration, and scene consistency"),
+        ("delete_object", "Delete Object", _obj_fallback_prompt("delete_object")),
+        ("replace_object", "Replace Object", _obj_fallback_prompt("replace_object")),
+        ("change_object_color", "Change Object Color", _obj_fallback_prompt("change_object_color")),
+        ("change_object_material", "Change Object Material", _obj_fallback_prompt("change_object_material")),
         ("add_vegetation", "Add Vegetation",
          "Add natural-looking vegetation appropriate to the scene, including plants, grass, shrubs, trees, and foliage where visually suitable"),
         ("add_people", "Add People",
@@ -267,6 +810,94 @@ ALL_PRESETS = {}
 for _cat_presets in PRESET_CATEGORIES.values():
     for _token, _label, _prompt in _cat_presets:
         ALL_PRESETS[_token] = _prompt
+
+
+# ---------------------------------------------------------------------------
+# Object-targeting prompt assembly
+# ---------------------------------------------------------------------------
+
+def _collect_object_targets(cop_node: hou.Node) -> list[tuple[str, str]]:
+    """Read object target MultiparmBlock instances.
+
+    Returns list of (object_name, modifier) pairs, skipping empty slots.
+    """
+    count_parm = cop_node.parm("obj_target_count")
+    if count_parm is None:
+        return []
+    count = int(count_parm.eval())
+    targets = []
+    for i in range(1, count + 1):
+        name = (_opt_parm_str(cop_node, f"obj_target_name_{i}") or "").strip()
+        mod = (_opt_parm_str(cop_node, f"obj_target_mod_{i}") or "").strip()
+        if name:
+            targets.append((name, mod))
+    return targets
+
+
+def _build_object_prompt(preset_key: str, targets: list[tuple[str, str]]) -> str | None:
+    """Assemble a prompt from object targets for the given preset.
+
+    Returns None if preset is not targeted or no valid targets provided.
+    """
+    if preset_key not in TARGETED_OBJECT_PRESETS or not targets:
+        return None
+
+    actions = _OBJ_ACTIONS[preset_key]
+    body = _OBJ_BODIES[preset_key]
+
+    if len(targets) == 1:
+        obj1, mod1 = targets[0]
+        action = actions["single"].replace("{obj1}", obj1)
+        if mod1:
+            action = action.replace("{mod1}", mod1)
+        elif preset_key != "delete_object":
+            # replace/color/material need a modifier — fall back to generic
+            return None
+    else:
+        if preset_key == "delete_object":
+            obj_list = ", ".join(name for name, _ in targets)
+            action = actions["multi"].replace("{obj_list}", obj_list)
+        else:
+            pairs = []
+            for name, mod in targets:
+                if mod:
+                    pairs.append(f"{name} to {mod}")
+                else:
+                    pairs.append(name)
+            obj_mod_list = "; ".join(pairs)
+            action = actions["multi"].replace("{obj_mod_list}", obj_mod_list)
+
+    return action + "\n" + body
+
+
+def _sync_object_prompt(node: hou.Node, preset_key: str) -> None:
+    """Rebuild the prompt from object targets if user hasn't manually edited."""
+    auto_parm = node.parm("_auto_prompt")
+    prompt_parm = node.parm("prompt")
+    if auto_parm is None or prompt_parm is None:
+        return
+
+    current_prompt = (prompt_parm.evalAsString() or "").strip()
+    auto_prompt = (auto_parm.evalAsString() or "").strip()
+
+    # Only auto-update if the prompt matches our last auto-generated version
+    # (or is empty, or matches the fallback preset text)
+    fallback = ALL_PRESETS.get(preset_key, "")
+    user_has_edited = (
+        current_prompt
+        and current_prompt != auto_prompt
+        and current_prompt != fallback
+    )
+    if user_has_edited:
+        return
+
+    targets = _collect_object_targets(node)
+    new_prompt = _build_object_prompt(preset_key, targets)
+    if new_prompt is None:
+        new_prompt = fallback
+
+    prompt_parm.set(new_prompt)
+    auto_parm.set(new_prompt)
 
 
 def _resolve_prompt(cop_node: hou.Node) -> tuple[str, str]:
@@ -305,8 +936,37 @@ def on_category_changed(kwargs: dict) -> None:
         preset_parm = node.parm(f"preset_{category}")
         if preset_parm is not None:
             preset_parm.set(0)
-        # Auto-fill prompt with first preset's text
-        node.parm("prompt").set(presets[0][2])
+        first_prompt = presets[0][2]
+        node.parm("prompt").set(first_prompt)
+
+        first_token = presets[0][0]
+        auto_parm = node.parm("_auto_prompt")
+
+        # Object targeting: init/clear multiparm
+        obj_count = node.parm("obj_target_count")
+        if obj_count is not None:
+            if category == "object_edits" and first_token in TARGETED_OBJECT_PRESETS:
+                if int(obj_count.eval()) == 0:
+                    obj_count.set(1)
+            else:
+                obj_count.set(0)
+
+        # Compositing element targeting: init/clear multiparm
+        comp_count = node.parm("comp_element_count")
+        if comp_count is not None:
+            if category == "compositing" and first_token in TARGETED_COMP_PRESETS:
+                if int(comp_count.eval()) == 0:
+                    comp_count.set(1)
+            else:
+                comp_count.set(0)
+
+        # Auto-prompt tracking
+        if auto_parm is not None:
+            if ((category == "object_edits" and first_token in TARGETED_OBJECT_PRESETS)
+                    or (category == "compositing" and first_token in TARGETED_COMP_PRESETS)):
+                auto_parm.set(first_prompt)
+            else:
+                auto_parm.set("")
 
 
 def on_preset_changed(kwargs: dict) -> None:
@@ -320,8 +980,144 @@ def on_preset_changed(kwargs: dict) -> None:
     parm_name = f"preset_{category}"
     preset_key = _opt_parm_menu_str(node, parm_name) or ""
     prompt_text = ALL_PRESETS.get(preset_key, "")
+
+    auto_parm = node.parm("_auto_prompt")
+    targeting_active = False
+
+    # Object targeting: init/clear multiparm and build prompt with targets
+    obj_count = node.parm("obj_target_count")
+    if obj_count is not None:
+        if preset_key in TARGETED_OBJECT_PRESETS:
+            if int(obj_count.eval()) == 0:
+                obj_count.set(1)
+            targets = _collect_object_targets(node)
+            injected = _build_object_prompt(preset_key, targets)
+            if injected:
+                prompt_text = injected
+            targeting_active = True
+        else:
+            obj_count.set(0)
+
+    # Compositing element targeting: init/clear multiparm and build prompt with elements
+    comp_count = node.parm("comp_element_count")
+    if comp_count is not None:
+        if preset_key in TARGETED_COMP_PRESETS:
+            if int(comp_count.eval()) == 0:
+                comp_count.set(1)
+            elements = _collect_comp_elements(node)
+            injected = _build_comp_prompt(preset_key, elements)
+            if injected:
+                prompt_text = injected
+            targeting_active = True
+        else:
+            comp_count.set(0)
+
+    # Auto-prompt tracking
+    if auto_parm is not None:
+        if targeting_active:
+            auto_parm.set(prompt_text)
+        else:
+            auto_parm.set("")
+
     if prompt_text:
         node.parm("prompt").set(prompt_text)
+
+
+def on_object_target_changed(kwargs: dict) -> None:
+    """Callback when any object target field changes — rebuild prompt."""
+    node = kwargs.get("node")
+    if node is None:
+        return
+    category = _opt_parm_menu_str(node, "category") or "custom"
+    if category != "object_edits":
+        return
+    preset_key = _opt_parm_menu_str(node, "preset_object_edits") or ""
+    if preset_key not in TARGETED_OBJECT_PRESETS:
+        return
+    _sync_object_prompt(node, preset_key)
+
+
+# ---------------------------------------------------------------------------
+# Compositing-element-targeting prompt assembly
+# ---------------------------------------------------------------------------
+
+def _collect_comp_elements(cop_node: hou.Node) -> list[str]:
+    """Read compositing element MultiparmBlock instances.
+
+    Returns list of non-empty element descriptions.
+    """
+    count_parm = cop_node.parm("comp_element_count")
+    if count_parm is None:
+        return []
+    count = int(count_parm.eval())
+    elements = []
+    for i in range(1, count + 1):
+        desc = (_opt_parm_str(cop_node, f"comp_element_desc_{i}") or "").strip()
+        if desc:
+            elements.append(desc)
+    return elements
+
+
+def _build_comp_prompt(preset_key: str, elements: list[str]) -> str | None:
+    """Assemble a prompt from compositing elements for the given preset.
+
+    Returns None if preset is not targeted or no valid elements provided.
+    """
+    if preset_key not in TARGETED_COMP_PRESETS or not elements:
+        return None
+
+    actions = _COMP_ACTIONS[preset_key]
+    body = _COMP_BODIES[preset_key]
+
+    if len(elements) == 1:
+        action = actions["single"].replace("{elem1}", elements[0])
+    else:
+        elem_list = ", ".join(elements)
+        action = actions["multi"].replace("{elem_list}", elem_list)
+
+    return action + "\n" + body
+
+
+def _sync_comp_prompt(node: hou.Node, preset_key: str) -> None:
+    """Rebuild the prompt from compositing elements if user hasn't manually edited."""
+    auto_parm = node.parm("_auto_prompt")
+    prompt_parm = node.parm("prompt")
+    if auto_parm is None or prompt_parm is None:
+        return
+
+    current_prompt = (prompt_parm.evalAsString() or "").strip()
+    auto_prompt = (auto_parm.evalAsString() or "").strip()
+
+    fallback = ALL_PRESETS.get(preset_key, "")
+    user_has_edited = (
+        current_prompt
+        and current_prompt != auto_prompt
+        and current_prompt != fallback
+    )
+    if user_has_edited:
+        return
+
+    elements = _collect_comp_elements(node)
+    new_prompt = _build_comp_prompt(preset_key, elements)
+    if new_prompt is None:
+        new_prompt = fallback
+
+    prompt_parm.set(new_prompt)
+    auto_parm.set(new_prompt)
+
+
+def on_comp_element_changed(kwargs: dict) -> None:
+    """Callback when any compositing element field changes — rebuild prompt."""
+    node = kwargs.get("node")
+    if node is None:
+        return
+    category = _opt_parm_menu_str(node, "category") or "custom"
+    if category != "compositing":
+        return
+    preset_key = _opt_parm_menu_str(node, "preset_compositing") or ""
+    if preset_key not in TARGETED_COMP_PRESETS:
+        return
+    _sync_comp_prompt(node, preset_key)
 
 
 def fibo_edit_recipes_bria(cop_node: hou.Node) -> None:
@@ -366,6 +1162,7 @@ def fibo_edit_recipes_bria(cop_node: hou.Node) -> None:
         )
 
         _validate_bria_image_file(img_path, "Input image")
+        img_path = _ensure_api_aspect_ratio(img_path)
 
         t_disk_end = time.perf_counter()
         _debug_log(f"Disk Write Overhead: {(t_disk_end - t_disk_start):.4f} sec")
@@ -458,6 +1255,11 @@ def fibo_edit_recipes_bria(cop_node: hou.Node) -> None:
             "preset": preset_key,
         })
 
+        # Store structured_prompt from API response if present (defensive)
+        hdefereval.executeDeferred(
+            lambda node=cop_node, d=data: store_vgl_from_response(node, d)
+        )
+
         hdefereval.executeDeferred(
             lambda node=cop_node, path=save_path, total=total_time: apply_result_to_ui(
                 node,
@@ -467,13 +1269,13 @@ def fibo_edit_recipes_bria(cop_node: hou.Node) -> None:
         )
 
     except (BriaConfigError, BriaRequestError) as e:
-        error_msg = f"Bria FIBO Edit Presets Error: {repr(e)}"
+        error_msg = f"Bria FIBO Edit Recipes Error: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria FIBO Edit Presets Exception: {repr(e)}"
+        error_msg = f"Bria FIBO Edit Presets Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)

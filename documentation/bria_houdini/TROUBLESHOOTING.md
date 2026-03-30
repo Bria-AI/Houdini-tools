@@ -1,21 +1,21 @@
-# Troubleshooting – Bria COPs
+# Troubleshooting -- Bria Houdini Tools
 
 ## 401 Unauthorized
 
-- Your token is not a valid Bria customer token key.
-- Prefer the Bria Dashboard panel to write keys into `~/.bria/bria.json`.
+- Your token is not a valid Bria API key.
+- Prefer the Bria Dashboard panel or Installer HDA to write keys into `~/.bria/bria.json`.
 - If using env vars, set `BRIA_API_KEY_HOUDINI`.
 - The node parameter `api_token` is deprecated.
 
 ## macOS TLS error: CERTIFICATE_VERIFY_FAILED
 
-If you see errors like:
+If you see:
 
 - `[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate`
 
 Houdini's embedded Python may be missing a CA-bundle path.
 
-Current integration behavior:
+Current behavior:
 
 - Package env sets `SSL_CERT_FILE=/etc/ssl/cert.pem`.
 - Bootstrap also attempts fallback CA discovery on macOS:
@@ -23,108 +23,104 @@ Current integration behavior:
   - `/private/etc/ssl/cert.pem`
   - `/opt/homebrew/etc/ca-certificates/cert.pem`
 
-If your machine uses a custom bundle path, set one of:
-
-- `SSL_CERT_FILE`
-- `REQUESTS_CA_BUNDLE`
-
-to a valid certificate bundle before launching Houdini.
+If your machine uses a custom bundle path, set `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` before launching Houdini.
 
 ## Bria Dashboard not showing (shelf or panel missing)
 
 Check the package JSON is loaded and these env paths are set:
 
-- `HOUDINI_TOOLBAR_PATH` → houdini/toolbar
-- `HOUDINI_PYTHON_PANEL_PATH` → houdini/python_panels
+- `HOUDINI_TOOLBAR_PATH` -> houdini/toolbar
+- `HOUDINI_PYTHON_PANEL_PATH` -> houdini/python_panels
 
-After changes, restart Houdini. You can also reload shelves in the Python Shell:
+After changes, restart Houdini. You can also reload shelves:
 
 - `hou.shelves.reloadShelves()`
 
-If the shelf still doesn’t appear, check the System Console for XML parse errors in the shelf file.
-
-## “Python panel 'bria_dashboard' not found”
-
-- Verify houdini/python_panels/bria_dashboard.pypanel exists.
-- Confirm `HOUDINI_PYTHON_PANEL_PATH` includes the python_panels folder.
-- Restart Houdini after changing the package JSON.
-
 ## 415 Unsupported Media Type
 
-Most often this is **not** the HTTP `Content-Type`.
-It usually means Bria rejected the *uploaded image/mask* encoding.
+Usually means Bria rejected the uploaded image/mask encoding, not the HTTP Content-Type.
 
 Checklist:
 
-- Exported files sent to Bria are real PNG bytes.
-- Files are <= 12MB.
-- Mask is **RGB/RGBA** (not grayscale / indexed / 16-bit PNG).
-  - In COPs, insert a convert/format node to force 3-channel RGB.
+- Exported files are real PNG bytes
+- Files are <= 12MB
+- Mask is **RGB/RGBA** (not grayscale / indexed / 16-bit PNG)
+  - In COPs, insert a convert/format node to force 3-channel RGB
 
-If you see an error like:
+## API rejects aspect ratio (422 error)
 
-- `Mask PNG is grayscale (color_type=0)`
+The Bria API requires image aspect ratios between 0.5 and 1.8. Images outside this range are automatically center-cropped to fit within [0.56, 1.78] bounds before upload.
 
-That’s exactly this issue — convert the mask to RGB/RGBA (8-bit) before it reaches the Bria node input.
+If you see a 422 error about aspect ratio, the auto-crop may have failed (e.g., zero-dimension image). Check that your input image has valid dimensions.
 
-## “Unsupported Input image file extension '.exr'”
+## Houdini Non-Commercial (NC) resolution limits
 
-Your COP input path is not producing a valid direct COP PNG export, and no valid node-local source file was found.
+Bria images display at **full resolution** in Houdini NC because they are loaded from disk files via the internal `loader_result` File node. This bypasses the COP pixel pipeline's 1920x1080 resolution cap.
 
-Bria runtime does not use upstream traversal fallback.
-For input-based HDAs, it tries internal deterministic ROPs first (`rop_save_input` / `rop_save_mask` when present), then direct COP export, exact-node temporary ROP export, and finally exact-node file-path source.
+However, if you merge Bria results with standard Houdini COP nodes (e.g., a Merge COP), the merged result goes through the pixel pipeline and will be capped at NC resolution. To avoid this, keep Bria node chains pure (Bria -> Bria) without intermediate Houdini pixel operations.
 
-Fix options:
+## macOS ROP render hangs / deadlocks
 
-- Ensure the intended image/mask input branch is connected and cookable.
-- Insert/adjust COP conversion so the branch produces a valid RGB/RGBA image before the Bria node.
+On macOS, calling `render()` on internal ROP nodes can deadlock Houdini. The integration automatically skips internal ROP rendering on macOS and falls through to the Tier 0 file passthrough (via `result_path`) or direct COP pixel export.
+
+If you suspect a hang, check the System Console for:
+
+- `[Bria COP Export] internal ROP render skipped on macOS (can deadlock)`
+
+This is expected behavior on macOS.
+
+## Post-restart "no image" on downstream nodes
+
+After restarting Houdini, downstream nodes may report "no image" even though the upstream image is visible in the viewport.
+
+This happens because `result_path` is a runtime parameter that isn't persisted in the .hip file. The internal `loader_result` File node retains the correct filename, so the image shows in the viewport, but downstream nodes can't find it via `result_path`.
+
+Fix: Re-run the upstream node to regenerate the image, or manually set the `result_path` parameter to the image file path.
+
+## "Unsupported Input image file extension '.exr'"
+
+Your COP input is not producing a valid PNG export. Bria runtime does not use upstream traversal fallback.
+
+Fix: Ensure the input branch produces a valid RGB/RGBA image. Insert COP conversion nodes if needed.
 
 ## Export path behavior (Copernicus)
 
-Bria runtime export now uses a shared Copernicus-friendly path resolver (`houdini/cop_export.py`).
+Bria runtime export uses a tiered fallback (`houdini/cop_export.py`):
 
-- It exports direct COP pixels from the connected node (preserves procedural processing).
-- For input-based HDAs, it first tries internal deterministic ROP exports when present.
-- If direct export is unavailable, it tries an exact-node temporary ROP Image Output export.
-- If that is also unavailable, it accepts only that same node's file-path source.
-- It writes a validated PNG file for downstream upload.
-- It does not rely on runtime internal ROP `execute` button export or `opwrite` fallback.
+1. Internal ROP export (`rop_save_input` / `rop_save_mask`) when present
+2. Direct COP pixel export from connected node
+3. Exact-node temporary ROP Image Output export
+4. Node-local file-path source (Tier 0: `result_path` passthrough)
 
-You can confirm the export path from logs:
+Confirm the export path from logs:
 
 - `[Bria COP Export] mode=internal-hda-rop ...`
 - `[Bria COP Export] mode=direct-cop ...`
 - `[Bria COP Export] mode=temp-rop-exact-node ...`
 - `[Bria COP Export] mode=node-source-path-copy ...`
-- `[Bria COP Export] mode=node-source-path-direct ...`
 
 ## Proxy behavior (`use_env_proxy`)
 
-- `use_env_proxy=on`: merge environment proxies with node proxy parms.
-- `use_env_proxy=off`: ignore environment proxies.
-- `http_proxy` / `https_proxy` parms override environment values when both are set.
+- `use_env_proxy=on`: merge environment proxies with node proxy parms
+- `use_env_proxy=off`: ignore environment proxies
+- `http_proxy` / `https_proxy` parms override environment values when both are set
 
 ## Result saved but Houdini shows old image
 
-- Ensure `loader_result` exists inside the HDA and is the node that feeds the output.
-- Ensure `switch_result` flips to the result input (if present).
-- Clear caches (`texcache -c`, `glcache -c`) — the module already tries this.
+- Ensure `loader_result` exists inside the HDA and feeds the output
+- Ensure `switch_result` flips to the result input (if present)
+- Clear caches (`texcache -c`, `glcache -c`) -- the module does this automatically
+- Force-cook the `outputs` node if needed
 
 ## Temp files saved in unexpected location
 
-Bria nodes now use a shared temp resolver.
+Resolution order: `TEMP` -> `TMP` -> `TMPDIR` (Houdini/env), then Python temp dir, then working dir fallback.
 
-- Resolution order: `TEMP` → `TMP` → `TMPDIR` (Houdini/env), then Python temp dir, then working dir fallback.
-- On macOS, this usually means files land under `$TMPDIR` (`/var/folders/.../T/`).
-- On Windows, this usually means `%TEMP%` / `%TMP%` (`AppData/Local/Temp`).
-
-If you still see files under project paths (for example, `$HIP`), verify that your Houdini/session environment is not overriding these vars.
+- macOS: usually `$TMPDIR` (`/var/folders/.../T/`)
+- Windows: usually `%TEMP%` / `%TMP%` (`AppData/Local/Temp`)
 
 ## Debugging tips
 
-- Open the System Console: Windows → Toggle System Console
-- Look for lines starting with `[Bria GenFill]` / `[Bria Erase]`.
-- The GenFill module logs:
-  - exported temp paths
-  - API time and download time
-  - final saved result path + bytes + content-type
+- Open the System Console: Windows -> Toggle System Console
+- Look for lines starting with `[Bria Enhancer]`, `[Bria FIBO Edit]`, `[Bria FIBO Generate]`, `[Bria Upscale]`, `[Bria Erase]`, `[Bria GenFill]`, `[Bria RMBG]`, `[Bria Expand]`, `[Bria FIBO Edit Recipes]`, `[Bria Generate Structured Prompt]`, `[Bria Viewport Render]`, `[Bria Batch]`
+- Each node logs: exported temp paths, API time, download time, final saved result path + bytes + content-type

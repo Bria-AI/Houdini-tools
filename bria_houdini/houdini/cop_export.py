@@ -24,8 +24,27 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".exr"}
 
 
+import logging as _logging
+_cop_export_logger = _logging.getLogger("bria.cop_export")
+
+
 def _debug_log(msg: str) -> None:
-    print(f"[Bria COP Export] {msg}")
+    _cop_export_logger.info("[Bria COP Export] %s", msg)
+
+
+def _safe_exc_str(exc: BaseException) -> str:
+    """Format exception without str()/repr() which can hang on hou exceptions."""
+    try:
+        name = type(exc).__name__
+    except Exception:
+        name = "Exception"
+    try:
+        args = exc.args
+        if args:
+            return f"{name}: {args[0]}" if len(args) == 1 else f"{name}{args}"
+    except Exception:
+        pass
+    return name
 
 
 def _is_png_file(path: str) -> bool:
@@ -88,6 +107,19 @@ def _find_image_path_on_node(node: Any) -> str | None:
             found = None
         if found:
             return found
+
+    # Fallback: check internal loader_result File node (post-restart persistence)
+    try:
+        loader = node.node("loader_result")
+        if loader is not None:
+            for pname in ("file", "filename1", "filename"):
+                p = loader.parm(pname)
+                if p is not None:
+                    found = _existing_image_path(p.evalAsString())
+                    if found:
+                        return found
+    except Exception:
+        pass
 
     return None
 
@@ -152,16 +184,15 @@ def _press_first_existing_button(node: Any, parm_names: tuple[str, ...]) -> bool
 def _allow_pressbutton_fallback() -> bool:
     """Whether to allow button-based render fallback.
 
-    Default behavior:
-    - macOS: disabled (can deadlock in some Houdini/Qt states)
-    - other platforms: enabled
+    pressButton uses Houdini's UI event loop rather than blocking render(),
+    making it safer on macOS where render() can deadlock.
 
-    Override with BRIA_ALLOW_PRESSBUTTON_FALLBACK=1/true/yes/on.
+    Override with BRIA_ALLOW_PRESSBUTTON_FALLBACK=0/false/no/off to disable.
     """
     raw = os.getenv("BRIA_ALLOW_PRESSBUTTON_FALLBACK")
     if isinstance(raw, str) and raw.strip():
         return raw.strip().lower() in {"1", "true", "yes", "on"}
-    return sys.platform != "darwin"
+    return True
 
 
 def _export_via_temp_rop(cop_node: Any, dst_path: str) -> bool:
@@ -288,31 +319,66 @@ def export_via_internal_rop(owner_node: Any, rop_name: str, dst_path: str | None
     if not rop_path:
         return None
 
+    # Tier 0: check if the upstream input already has a result file on disk.
+    # This bypasses Copernicus entirely, avoiding Apprentice/NC resolution limits
+    # (1920x1080 cap on Copernicus) and potential render deadlocks.
+    #
+    # Determine which HDA input this ROP corresponds to by checking
+    # which output of the internal 'inputs' node it's wired to.
+    # rop_save_input → inputs output 0 → HDA input 1 (source image)
+    # rop_save_mask  → inputs output 1 → HDA input 2 (mask)
+    input_idx = 0
+    try:
+        inputs_node = owner_node.node("inputs")
+        if inputs_node is not None:
+            conns = rop.inputConnections()
+            if conns:
+                conn = conns[0]
+                if conn.inputNode() == inputs_node:
+                    input_idx = conn.outputIndex()
+    except Exception:
+        pass
+
+    inputs = owner_node.inputs()
+    if inputs and len(inputs) > input_idx:
+        upstream = inputs[input_idx]
+        if upstream is not None:
+            src = _find_image_path_on_node(upstream)
+            if src and os.path.isfile(src):
+                target = dst_path if dst_path else rop_path
+                src_abs = os.path.abspath(src)
+                dst_abs = os.path.abspath(target)
+                if src_abs != dst_abs:
+                    os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
+                    shutil.copyfile(src_abs, dst_abs)
+                _debug_log(f"mode=internal-rop-passthrough | src={src_abs} | dst={dst_abs}")
+                return dst_abs
+
     try:
         os.makedirs(os.path.dirname(rop_path), exist_ok=True)
     except Exception:
         pass
 
     rendered = False
-    render = getattr(rop, "render", None)
-    if callable(render):
-        try:
-            render()
-            rendered = True
-            _debug_log(f"internal ROP render() succeeded | rop={rop_name}")
-        except Exception as exc:
+    # On macOS, render() can deadlock — skip it, but still try pressButton below
+    if sys.platform != "darwin":
+        render = getattr(rop, "render", None)
+        if callable(render):
             try:
-                exc_msg = repr(exc)
-            except Exception:
-                exc_msg = type(exc).__name__
-            _debug_log(f"internal ROP render() failed: {exc_msg} | rop={rop_name}")
-            rendered = False
+                render()
+                rendered = True
+                _debug_log(f"internal ROP render() succeeded | rop={rop_name}")
+            except Exception as exc:
+                exc_msg = _safe_exc_str(exc)
+                _debug_log(f"internal ROP render() failed: {exc_msg} | rop={rop_name}")
+                rendered = False
 
     if not rendered:
+        # pressButton uses Houdini's UI event loop — safer than render() on macOS
         if _allow_pressbutton_fallback():
             rendered = _press_first_existing_button(rop, ("execute", "render", "executebutton"))
         else:
-            _debug_log(f"pressButton fallback skipped on macOS | rop={rop_name}")
+            _debug_log(f"pressButton fallback disabled via env var | rop={rop_name}")
 
     if not rendered:
         _debug_log(f"internal ROP export failed (not rendered) | rop={rop_name} | dst={rop_path}")
@@ -343,16 +409,11 @@ def cop_to_png(cop_node: Any, dst_path: str) -> str:
 
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-    # Export from the provided COP node via deterministic alternatives only:
-    # 1) temporary ROP export from this exact node, or
-    # 2) this exact node's own file-path source.
-    # No upstream traversal is allowed.
-    if _export_cop_pixels_to_png(cop_node, dst_path):
-        return dst_path
-
-    if _export_via_temp_rop(cop_node, dst_path):
-        return dst_path
-
+    # Tier 0: If the node has a file on disk (e.g. result_path from a
+    # previous Bria API call), use it directly.  This bypasses the COP
+    # pixel pipeline entirely, which prevents Houdini Non-Commercial
+    # from applying watermarks or throwing resolution-limit errors on
+    # high-res results (e.g. 4x upscale → downstream edit).
     src_path = _find_image_path_on_node(cop_node)
     if src_path:
         src_abs = os.path.abspath(src_path)
@@ -367,6 +428,14 @@ def cop_to_png(cop_node: Any, dst_path: str) -> str:
 
         _debug_log(f"mode=node-source-path-direct | node={cop_node.path()} | src={src_abs}")
         return src_abs
+
+    # Tier 1: Direct COP pixel export (may fail under NC license limits)
+    if _export_cop_pixels_to_png(cop_node, dst_path):
+        return dst_path
+
+    # Tier 2: Temporary ROP export from this exact node
+    if _export_via_temp_rop(cop_node, dst_path):
+        return dst_path
 
     raise RuntimeError(
         f"Could not export COP pixels from node: {cop_node.path()} and no usable file path was found on that node. "

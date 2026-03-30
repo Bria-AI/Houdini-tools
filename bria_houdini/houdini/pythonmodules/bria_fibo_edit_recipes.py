@@ -9,12 +9,15 @@ from houdini.nodes.fibo_edit_recipes import (
     on_fibo_edit_recipes,
     on_category_changed,
     on_preset_changed,
+    on_object_target_changed,
+    on_comp_element_changed,
     CATEGORY_ORDER,
     PRESET_CATEGORIES,
     ALL_PRESETS,
 )
 from houdini.vgl_parms import (
     on_parse_vgl,
+    sync_vgl_to_json,
     on_refresh_upstream,
     clear_vgl_parms,
 )
@@ -38,7 +41,10 @@ __all__ = [
     "on_fibo_edit_recipes",
     "on_category_changed",
     "on_preset_changed",
+    "on_object_target_changed",
+    "on_comp_element_changed",
     "on_parse_vgl",
+    "sync_vgl_to_json",
     "on_refresh_upstream",
     "clear_vgl_parms",
     "build_history_menu",

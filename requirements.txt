@@ -1,0 +1,3 @@
+# Bria Houdini Integration v0.1.0
+# No external pip packages required.
+# All dependencies are Python standard library + Houdini built-in modules (hou, hdefereval).

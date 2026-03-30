@@ -19,43 +19,43 @@ from bria_core.logging import configure_logging, get_logger
 from bria_core.errors import BriaConfigError
 
 
+_CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/cert.pem",                          # macOS, some Linux
+    "/etc/ssl/certs/ca-certificates.crt",          # Debian/Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",            # RHEL/CentOS/Fedora
+    "/etc/ssl/ca-bundle.pem",                      # openSUSE
+    "/private/etc/ssl/cert.pem",                   # macOS alternate
+    "/opt/homebrew/etc/ca-certificates/cert.pem",  # Homebrew macOS
+)
+
+
 def _ensure_ssl_cert_file(logger) -> None:
     """Ensure embedded Python can validate HTTPS certificates.
 
-    - On macOS: auto-detect a CA bundle when SSL_CERT_FILE is missing/invalid.
-    - On non-macOS: clear macOS placeholder values if they were injected by package env.
+    On macOS/Linux: auto-detect a CA bundle when SSL_CERT_FILE is missing/invalid.
+    On Windows: clear any invalid SSL_CERT_FILE and let Python use the native cert store.
     """
     current = (os.getenv("SSL_CERT_FILE") or "").strip()
 
-    mac_candidates = (
-        "/etc/ssl/cert.pem",
-        "/private/etc/ssl/cert.pem",
-        "/opt/homebrew/etc/ca-certificates/cert.pem",
-    )
-
-    if sys.platform == "darwin":
-        if current and os.path.exists(current):
-            return
-
-        for candidate in mac_candidates:
-            if os.path.exists(candidate):
-                os.environ["SSL_CERT_FILE"] = candidate
-                os.environ.setdefault("REQUESTS_CA_BUNDLE", candidate)
-                os.environ.setdefault("BRIA_CA_BUNDLE", candidate)
-                logger.info("Bria bootstrap set SSL_CERT_FILE=%s", candidate)
-                return
-
-        logger.warning("Bria bootstrap could not find a macOS CA bundle for SSL_CERT_FILE")
+    if current and os.path.exists(current):
         return
 
-    # Non-macOS safety: if package env injected a macOS placeholder path, unset it.
-    if current in mac_candidates and not os.path.exists(current):
+    if current and not os.path.exists(current):
         os.environ.pop("SSL_CERT_FILE", None)
-        if (os.getenv("REQUESTS_CA_BUNDLE") or "").strip() == current:
-            os.environ.pop("REQUESTS_CA_BUNDLE", None)
-        if (os.getenv("BRIA_CA_BUNDLE") or "").strip() == current:
-            os.environ.pop("BRIA_CA_BUNDLE", None)
-        logger.info("Bria bootstrap cleared macOS SSL_CERT_FILE placeholder on non-macOS")
+        logger.info("Bria bootstrap cleared invalid SSL_CERT_FILE=%s", current)
+
+    if sys.platform == "win32":
+        return
+
+    for candidate in _CA_BUNDLE_CANDIDATES:
+        if os.path.exists(candidate):
+            os.environ["SSL_CERT_FILE"] = candidate
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", candidate)
+            os.environ.setdefault("BRIA_CA_BUNDLE", candidate)
+            logger.info("Bria bootstrap set SSL_CERT_FILE=%s", candidate)
+            return
+
+    logger.warning("Bria bootstrap could not find a CA bundle for SSL_CERT_FILE")
 
 
 def init() -> None:
@@ -73,12 +73,8 @@ def init() -> None:
                 status["resolved_endpoint"],
                 status["using_env_override"],
             )
-            print(
-                f"[Bria] Bootstrap OK | endpoint={status['resolved_endpoint']} | env_override={status['using_env_override']}"
-            )
         else:
             logger.warning("Bria Houdini bootstrap: %s (%s)", status["message"], status["reason"])
-            print(f"[Bria] Bootstrap WARNING | {status['message']} ({status['reason']})")
             if hou is not None and getattr(hou, "isUIAvailable", lambda: False)():
                 try:
                     hou.ui.setStatusMessage(status["message"], severity=hou.severityType.Warning)

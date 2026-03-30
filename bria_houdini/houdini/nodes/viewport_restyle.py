@@ -423,7 +423,7 @@ def create_render_camera(node) -> Optional[object]:
 
     except Exception as e:
         logger.exception("Failed to create camera")
-        hou.ui.displayMessage(f"Failed to create camera: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Failed to create camera: {repr(e)}", title="Bria Error")
         return None
 
 
@@ -508,7 +508,7 @@ def render_viewport_opengl(node) -> Optional[str]:
 
     except Exception as e:
         logger.exception("Viewport render failed")
-        raise RuntimeError(f"Viewport render failed: {e}")
+        raise RuntimeError(f"Viewport render failed: {repr(e)}")
 
 
 def call_bria_restyle(
@@ -734,7 +734,7 @@ def restyle_viewport(node) -> Optional[str]:
         logger.exception("Restyle failed")
         if status_parm:
             status_parm.set("Error")
-        hou.ui.displayMessage(f"Restyle failed: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Restyle failed: {repr(e)}", title="Bria Error")
         return None
 
 
@@ -1069,7 +1069,7 @@ def apply_texture(node) -> bool:
                 applied_count += 1
 
             except Exception as e:
-                logger.warning(f"Failed to apply texture to {geo_obj.path()}: {e}")
+                logger.warning(f"Failed to apply texture to {geo_obj.path()}: {repr(e)}")
 
         if status_parm:
             status_parm.set("Done!")
@@ -1087,7 +1087,7 @@ def apply_texture(node) -> bool:
         logger.exception("Apply texture failed")
         if status_parm:
             status_parm.set("Error")
-        hou.ui.displayMessage(f"Apply texture failed: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Apply texture failed: {repr(e)}", title="Bria Error")
         return False
 
 

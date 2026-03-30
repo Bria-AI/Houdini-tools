@@ -16,7 +16,7 @@ from typing import Optional
 
 from bria_core.utils import download_url, extract_image_url, resolve_temp_dir
 from houdini.adapter import fibo_edit_from_files
-from houdini.node_utils import clamp_steps_num
+from houdini.node_utils import _safe_exc_str, clamp_steps_num
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +27,15 @@ DEFAULT_OUTPUT_DIR = ""
 # Supported FIBO Edit resolutions (width x height)
 # ---------------------------------------------------------------------------
 SUPPORTED_RESOLUTIONS = {
-    "1024x1024": (1024, 1024),
-    "1216x832":  (1216, 832),
-    "832x1216":  (832, 1216),
-    "1152x896":  (1152, 896),
-    "896x1152":  (896, 1152),
-    "1088x896":  (1088, 896),
-    "896x1088":  (896, 1088),
-    "1344x768":  (1344, 768),
-    "768x1344":  (768, 1344),
+    "1024x1024": (1024, 1024),    # 1:1 Square
+    "1152x768":  (1152, 768),     # 3:2 Landscape
+    "768x1152":  (768, 1152),     # 2:3 Portrait
+    "1024x768":  (1024, 768),     # 4:3 Landscape
+    "768x1024":  (768, 1024),     # 3:4 Portrait
+    "960x768":   (960, 768),      # 5:4 Landscape
+    "768x960":   (768, 960),      # 4:5 Portrait
+    "1024x576":  (1024, 576),     # 16:9 Wide
+    "576x1024":  (576, 1024),     # 9:16 Tall
 }
 
 
@@ -170,6 +170,9 @@ def extract_noun_from_prompt(prompt: str) -> str:
         A sanitized noun suitable for filename (lowercase, alphanumeric only)
     """
     import re
+
+    if not prompt:
+        return "render"
 
     # Common words to skip
     skip_words = {
@@ -312,8 +315,8 @@ def _resolution_wh_from_node(node) -> tuple[int, int]:
             height = int(nums[1])
             if width > 0 and height > 0:
                 return width, height
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Resolution parse error: %s", _safe_exc_str(e))
 
     logger.warning("Could not parse resolution '%s'; falling back to 1024x1024.", resolution_str)
     return 1024, 1024
@@ -327,8 +330,8 @@ def _set_camera_resolution(camera_node, width: int, height: int) -> None:
             resx.set(int(width))
         if resy is not None:
             resy.set(int(height))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to set camera resolution: %s", _safe_exc_str(e))
 
 
 def _is_camera_node(node) -> bool:
@@ -457,7 +460,7 @@ def create_render_camera(node) -> Optional[object]:
 
     except Exception as e:
         logger.exception("Failed to create camera")
-        hou.ui.displayMessage(f"Failed to create camera: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Failed to create camera: {_safe_exc_str(e)}", title="Bria Error")
         return None
 
 
@@ -542,7 +545,7 @@ def render_viewport_opengl(node) -> Optional[str]:
 
     except Exception as e:
         logger.exception("Viewport render failed")
-        raise RuntimeError(f"Viewport render failed: {e}")
+        raise RuntimeError(f"Viewport render failed: {_safe_exc_str(e)}")
 
 
 def call_bria_render(
@@ -592,100 +595,149 @@ def call_bria_render(
     return result_path
 
 
-def display_in_mplay(image_path: str) -> bool:
+def _reapply_texture_to_objects(image_path: str) -> int:
+    """Update basecolor_texture on all geometry objects that have a Bria material applied.
+
+    Returns the number of objects updated.
     """
-    Display the result image in Houdini's MPlay.
+    import hou
+
+    count = 0
+    try:
+        for geo_obj in get_displayed_geometry_objects():
+            mat_sop = geo_obj.node("bria_material")
+            if mat_sop is None:
+                continue
+            mat_path_parm = mat_sop.parm("shop_materialpath1")
+            if not mat_path_parm:
+                continue
+            mat_node = hou.node(mat_path_parm.eval())
+            if mat_node is None:
+                continue
+            tex_parm = mat_node.parm("basecolor_texture")
+            if tex_parm is not None:
+                tex_parm.set(image_path)
+                count += 1
+    except Exception as exc:
+        logger.warning("Auto-reapply texture failed (non-fatal): %s", _safe_exc_str(exc))
+
+    if count > 0:
+        logger.info("Auto-reapplied texture to %d object(s)", count)
+    return count
+
+
+def _find_houdini_binary(name: str) -> Optional[str]:
+    """Locate a Houdini binary (mplay, imdisplay, etc.) in $HFS/bin."""
+    import hou
+
+    bin_name = f"{name}.exe" if sys.platform == "win32" else name
+
+    # Method 1: hou.findFile
+    try:
+        path = hou.findFile(f"bin/{bin_name}")
+        if path and os.path.exists(path):
+            return path
+    except Exception:
+        pass
+
+    # Method 2: Direct $HFS/bin path
+    try:
+        hfs = hou.getenv("HFS")
+        if hfs:
+            path = os.path.join(hfs, "bin", bin_name)
+            if os.path.exists(path):
+                return path
+    except Exception:
+        pass
+
+    return None
+
+
+def display_in_mplay(image_path: str) -> bool:
+    """Display the result image in Houdini's MPlay.
+
+    Uses ``imdisplay -Y "Bria Viewport"`` so every Bria render is sent to
+    the same labeled MPlay window.  If no MPlay with that label exists yet,
+    ``imdisplay`` creates one automatically.  Each new image appears as the
+    next frame in the sequence — matching how flipbooks and renders behave.
 
     Args:
         image_path: Path to image file
 
     Returns:
-        True if successfully launched, False otherwise
+        True if successfully sent, False otherwise
     """
-    import hou
-
     normalized_path = image_path.replace("\\", "/")
 
-    # Determine platform
-    if sys.platform == "win32":
-        mplay_name = "mplay.exe"
-    else:
-        mplay_name = "mplay"
-
-    failures: list[str] = []
-
-    # Method 1: hou.findFile
-    try:
-        mplay_path = hou.findFile(f"bin/{mplay_name}")
-        if mplay_path and os.path.exists(mplay_path):
-            subprocess.Popen([mplay_path, normalized_path])
+    # Use imdisplay with a label — creates or reuses a named MPlay session
+    imdisplay_path = _find_houdini_binary("imdisplay")
+    if imdisplay_path:
+        try:
+            subprocess.Popen([
+                imdisplay_path,
+                "-Y", "Bria Viewport",
+                normalized_path,
+            ])
+            logger.info("Sent to MPlay (Bria Viewport): %s", normalized_path)
             return True
-        elif mplay_path:
-            failures.append(f"method1: resolved path does not exist ({mplay_path})")
-        else:
-            failures.append("method1: hou.findFile returned empty path")
-    except Exception as e:
-        failures.append(f"method1: {e}")
+        except Exception as exc:
+            logger.warning("imdisplay failed: %s", _safe_exc_str(exc))
 
-    # Method 2: Direct HFS path
-    try:
-        hfs = hou.getenv("HFS")
-        if hfs:
-            mplay_direct = os.path.join(hfs, "bin", mplay_name)
-            if os.path.exists(mplay_direct):
-                subprocess.Popen([mplay_direct, normalized_path])
-                return True
-            failures.append(f"method2: executable not found at {mplay_direct}")
-        else:
-            failures.append("method2: HFS not set")
-    except Exception as e:
-        failures.append(f"method2: {e}")
+    # Fallback: launch mplay directly (opens a new window each time)
+    mplay_path = _find_houdini_binary("mplay")
+    if mplay_path:
+        try:
+            subprocess.Popen([mplay_path, normalized_path])
+            logger.info("Launched MPlay: %s", normalized_path)
+            return True
+        except Exception as exc:
+            logger.warning("mplay launch failed: %s", _safe_exc_str(exc))
 
-    # Method 3: Windows default (fallback)
+    # Windows fallback: open with default viewer
     if sys.platform == "win32":
         try:
             os.startfile(normalized_path)
             return True
-        except Exception as e:
-            failures.append(f"method3: {e}")
+        except Exception:
+            pass
 
-    if failures:
-        logger.warning("Failed to open result in MPlay (%s): %s", normalized_path, " | ".join(failures))
-
+    logger.warning("Could not display result in MPlay: %s", normalized_path)
     return False
 
 
 def _swap_display_for_clean_capture(node):
-    """Temporarily restore original display nodes for greybox capture.
+    """Temporarily swap display to the node feeding into the Bria texture chain.
 
-    Reads the ``_orig_display_nodes`` hidden parm (JSON dict mapping
-    geo_obj_path → original_display_node_path) and sets the display flag
-    back to each original node so the viewport shows untextured geometry.
+    For each displayed geometry object that has a ``bria_uv_project`` node,
+    sets the display flag to whatever is wired into its input 0.  This
+    captures the current untextured geometry — including any SOPs the user
+    added after the initial texture application (e.g. a Smooth).
+
+    Objects that don't have a Bria texture chain yet are left untouched.
 
     Returns:
         dict mapping geo_path → bria_material SOP node (to restore later),
         or empty dict if nothing was swapped.
     """
-    import json
     import hou
 
-    orig_json = _eval_parm_str(node, "_orig_display_nodes") or "{}"
-    try:
-        orig_map = json.loads(orig_json)
-    except Exception:
-        return {}
-
     restored = {}
-    for geo_path, orig_node_path in orig_map.items():
-        geo_obj = hou.node(geo_path)
-        orig_node = hou.node(orig_node_path) if orig_node_path else None
-        if geo_obj is None or orig_node is None:
-            continue
-        # Remember the current material SOP so we can restore it later
+    for geo_obj in get_displayed_geometry_objects():
+        uv_proj = geo_obj.node("bria_uv_project")
         mat_sop = geo_obj.node("bria_material")
-        if mat_sop is not None:
-            orig_node.setDisplayFlag(True)
-            restored[geo_path] = mat_sop
+        if uv_proj is None or mat_sop is None:
+            continue
+
+        # The node wired into bria_uv_project input 0 is the last
+        # user SOP before the Bria chain — this is what we capture.
+        inputs = uv_proj.inputs()
+        if not inputs or inputs[0] is None:
+            continue
+
+        pre_bria_node = inputs[0]
+        pre_bria_node.setDisplayFlag(True)
+        restored[geo_obj.path()] = mat_sop
+
     return restored
 
 
@@ -735,7 +787,8 @@ def render_viewport(node) -> Optional[str]:
             try:
                 from houdini.vgl_parms import assemble_from_parms
                 structured_prompt = assemble_from_parms(node)
-            except Exception:
+            except Exception as e:
+                logger.debug("VGL assembly failed, falling back to raw JSON: %s", _safe_exc_str(e))
                 structured_prompt = None
             if not structured_prompt:
                 structured_prompt = _eval_parm_str(node, "structured_prompt")
@@ -857,7 +910,8 @@ def render_viewport(node) -> Optional[str]:
                 elif isinstance(sp, str):
                     try:
                         json_str = json.dumps(json.loads(sp), indent=2)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("VGL JSON re-format failed, using raw: %s", _safe_exc_str(e))
                         json_str = sp
                 else:
                     json_str = None
@@ -869,28 +923,12 @@ def render_viewport(node) -> Optional[str]:
                     populate_parms_from_json(node, json_str)
                     logger.info("Auto-populated VGL fields from basic prompt")
             except Exception as e:
-                logger.warning(f"Auto-populate VGL failed (non-fatal): {repr(e)}")
+                logger.warning(f"Auto-populate VGL failed: {_safe_exc_str(e)}")
+                if status_parm:
+                    status_parm.set(f"VGL update failed: {_safe_exc_str(e)}")
 
         # Step 4: Auto-reapply texture if previously applied
-        # Updates the shader's basecolor_texture so viewport shows the new result
-        try:
-            displayed_objects = get_displayed_geometry_objects()
-            reapplied = 0
-            for geo_obj in displayed_objects:
-                mat_sop = geo_obj.node("bria_material")
-                if mat_sop is not None:
-                    mat_path = mat_sop.parm("shop_materialpath1")
-                    if mat_path:
-                        mat_node = hou.node(mat_path.eval())
-                        if mat_node is not None:
-                            tex_parm = mat_node.parm("basecolor_texture")
-                            if tex_parm is not None:
-                                tex_parm.set(result_path)
-                                reapplied += 1
-            if reapplied > 0:
-                logger.info(f"Auto-reapplied texture to {reapplied} object(s)")
-        except Exception as e:
-            logger.warning(f"Auto-reapply texture failed (non-fatal): {repr(e)}")
+        _reapply_texture_to_objects(result_path)
 
         # Step 5: Display in MPlay
         if status_parm:
@@ -916,7 +954,7 @@ def render_viewport(node) -> Optional[str]:
         logger.exception("Viewport render failed")
         if status_parm:
             status_parm.set("Error")
-        hou.ui.displayMessage(f"Viewport render failed: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Viewport render failed: {_safe_exc_str(e)}", title="Bria Error")
         return None
 
 
@@ -1069,12 +1107,11 @@ def upscale_result_callback():
         if source_image_parm is not None:
             source_image_parm.set(upscaled_path)
 
-        # Re-apply texture if material already exists
-        obj = node.node("/obj")
-        if obj is not None:
-            mat_context = obj.node("bria_materials")
-            if mat_context is not None:
-                apply_texture(node)
+        # Re-apply texture to any geometry that already has a Bria material
+        _reapply_texture_to_objects(upscaled_path)
+
+        # Show in existing MPlay
+        display_in_mplay(upscaled_path)
 
         if status_parm:
             status_parm.set(f"Upscale {scale} complete!")
@@ -1090,7 +1127,77 @@ def upscale_result_callback():
         logger.exception("Upscale failed")
         if status_parm:
             status_parm.set("Upscale error")
-        hou.ui.displayMessage(f"Upscale failed: {repr(e)}", title="Bria Error")
+        hou.ui.displayMessage(f"Upscale failed: {_safe_exc_str(e)}", title="Bria Error")
+
+
+def enhance_result_callback():
+    """Callback for 'Run Bria Enhance' button — enhance the last render result."""
+    import hou
+    from houdini.adapter import upscale_from_files
+
+    node = hou.pwd()
+    status_parm = node.parm("status")
+
+    try:
+        result_path = _eval_parm_str(node, "result_path")
+        if not result_path or not os.path.exists(result_path):
+            hou.ui.displayMessage(
+                "No render result to enhance.\nPlease render the viewport first.",
+                title="Bria Error"
+            )
+            return
+
+        resolution = _eval_parm_str(node, "enhance_resolution") or "1MP"
+        if status_parm:
+            status_parm.set(f"Enhancing ({resolution})...")
+
+        data = upscale_from_files(
+            image_path=result_path,
+            mode="enhance",
+            resolution=resolution,
+        )
+
+        dl_url = extract_image_url(data)
+        if not dl_url:
+            raise RuntimeError(f"Unexpected Bria enhance response (no image_url): {data}")
+
+        img_bytes, _content_type = download_url(dl_url, timeout_s=300, proxies=None)
+
+        # Save enhanced image alongside the original
+        base, ext = os.path.splitext(result_path)
+        enhanced_path = f"{base}_enhanced_{resolution}{ext}"
+        with open(enhanced_path, "wb") as f:
+            f.write(img_bytes)
+
+        # Update node parms so subsequent operations use the enhanced image
+        result_path_parm = node.parm("result_path")
+        if result_path_parm is not None:
+            result_path_parm.set(enhanced_path)
+        source_image_parm = node.parm("source_image")
+        if source_image_parm is not None:
+            source_image_parm.set(enhanced_path)
+
+        # Re-apply texture to any geometry that already has a Bria material
+        _reapply_texture_to_objects(enhanced_path)
+
+        # Show in existing MPlay
+        display_in_mplay(enhanced_path)
+
+        if status_parm:
+            status_parm.set(f"Enhance ({resolution}) complete!")
+
+        hou.ui.displayMessage(
+            f"Bria Enhance Complete!\n\n"
+            f"Resolution: {resolution}\n"
+            f"Saved to:\n{enhanced_path}",
+            title="Bria Enhance"
+        )
+
+    except Exception as e:
+        logger.exception("Enhance failed")
+        if status_parm:
+            status_parm.set("Enhance error")
+        hou.ui.displayMessage(f"Enhance failed: {_safe_exc_str(e)}", title="Bria Error")
 
 
 # ============== Structured Prompt Callbacks ==============
@@ -1159,13 +1266,19 @@ def generate_vgl_callback():
         logger.exception("VGL generation failed")
         if status_parm:
             status_parm.set("VGL generation error")
-        hou.ui.displayMessage(f"VGL generation failed: {repr(e)}", title="Bria Error")
+        hou.ui.displayMessage(f"VGL generation failed: {_safe_exc_str(e)}", title="Bria Error")
 
 
 def on_parse_vgl(kwargs):
     """Parse raw VGL JSON into structured fields. Wraps vgl_parms.on_parse_vgl."""
     from houdini.vgl_parms import on_parse_vgl as _on_parse_vgl
     _on_parse_vgl(kwargs)
+
+
+def sync_vgl_to_json(kwargs):
+    """Assemble structured VGL fields back into raw JSON. Wraps vgl_parms.sync_vgl_to_json."""
+    from houdini.vgl_parms import sync_vgl_to_json as _sync
+    _sync(kwargs)
 
 
 # ============== Apply Texture Functions ==============
@@ -1363,9 +1476,9 @@ def apply_texture(node) -> bool:
     try:
         status_parm = node.parm("status")
 
-        # Get parameters — prefer the user's explicit pulldown selection,
-        # fall back to the last render result
-        image_path = _eval_parm_str(node, "source_image") or _eval_parm_str(node, "result_path")
+        # Get parameters — prefer the AI render result,
+        # fall back to the source image (viewport screenshot)
+        image_path = _eval_parm_str(node, "result_path") or _eval_parm_str(node, "source_image")
         use_pbr = node.parm("use_pbr").eval() if node.parm("use_pbr") else False
 
         if not image_path or not os.path.exists(image_path):
@@ -1432,43 +1545,23 @@ def apply_texture(node) -> bool:
         if status_parm:
             status_parm.set("Applying texture...")
 
-        # Track original display nodes so "Create New Texture" mode can
-        # restore them for clean greybox captures.
-        import json
-        orig_json = _eval_parm_str(node, "_orig_display_nodes") or "{}"
-        try:
-            orig_map = json.loads(orig_json)
-        except Exception:
-            orig_map = {}
-
         # Apply to each object
         applied_count = 0
         for geo_obj in displayed_objects:
             try:
-                geo_path = geo_obj.path()
-
-                # On first application, remember the original display node
-                if geo_path not in orig_map and geo_obj.node("bria_material") is None:
-                    display_node = geo_obj.displayNode()
-                    if display_node is not None:
-                        orig_map[geo_path] = display_node.path()
-
                 # Create/get texture nodes (returns material SOP directly)
                 material_sop = create_texture_nodes(geo_obj, camera_path)
 
-                # Set material path on material SOP
+                # Set material path on material SOP and ensure display flag
                 if material_sop:
                     material_sop.parm("shop_materialpath1").set(material_path)
+                    material_sop.setDisplayFlag(True)
+                    material_sop.setRenderFlag(True)
 
                 applied_count += 1
 
             except Exception as e:
-                logger.warning(f"Failed to apply texture to {geo_obj.path()}: {e}")
-
-        # Persist the original display node map
-        orig_parm = _find_parm(node, "_orig_display_nodes")
-        if orig_parm is not None:
-            orig_parm.set(json.dumps(orig_map))
+                logger.warning(f"Failed to apply texture to {geo_obj.path()}: {_safe_exc_str(e)}")
 
         if status_parm:
             status_parm.set("Done!")
@@ -1486,7 +1579,7 @@ def apply_texture(node) -> bool:
         logger.exception("Apply texture failed")
         if status_parm:
             status_parm.set("Error")
-        hou.ui.displayMessage(f"Apply texture failed: {e}", title="Bria Error")
+        hou.ui.displayMessage(f"Apply texture failed: {_safe_exc_str(e)}", title="Bria Error")
         return False
 
 

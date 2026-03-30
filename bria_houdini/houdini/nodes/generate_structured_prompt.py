@@ -18,7 +18,7 @@ import hdefereval
 from bria_core.errors import BriaConfigError, BriaRequestError
 from bria_core.utils import resolve_proxies, resolve_temp_dir
 from houdini.adapter import generate_structured_prompt
-from houdini.cop_export import export_via_internal_rop, cop_to_png
+from houdini.cop_export import export_via_internal_rop, cop_to_png, _safe_exc_str
 from houdini.node_utils import (
     clamp_steps_num,
     debug_logger,
@@ -58,7 +58,7 @@ def generate_structured_prompt_bria(cop_node: hou.Node) -> None:
                     or cop_to_png(input_op, img_export_path)
                 )
             except Exception as exc:
-                _debug_log(f"Image export failed: {repr(exc)}")
+                _debug_log(f"Image export failed: {_safe_exc_str(exc)}")
                 image_path = None
                 if not prompt:
                     hou.ui.displayMessage(
@@ -136,6 +136,13 @@ def generate_structured_prompt_bria(cop_node: hou.Node) -> None:
         else:
             result_json = json.dumps(structured_prompt, indent=2, default=str)
 
+        # Passthrough: copy input image path to result_path so downstream
+        # nodes can find the image via _find_image_path_on_node().
+        if image_path:
+            rp = cop_node.parm("result_path")
+            if rp is not None:
+                rp.set(image_path)
+
         # Store result on the node for downstream consumption
         result_parm = cop_node.parm("result_json")
         if result_parm is not None:
@@ -202,7 +209,7 @@ def generate_structured_prompt_bria(cop_node: hou.Node) -> None:
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
         )
     except Exception as e:
-        error_msg = f"Bria Structured Prompt Exception: {e}"
+        error_msg = f"Bria Structured Prompt Exception: {_safe_exc_str(e)}"
         _debug_log(error_msg)
         hdefereval.executeDeferred(
             lambda msg=error_msg: hou.ui.setStatusMessage(msg, severity=hou.severityType.Error)
@@ -222,7 +229,7 @@ def _update_description_label(node: hou.Node, description: str) -> None:
             ptg.replace("vgl_description", replacement)
             node.setParmTemplateGroup(ptg)
     except Exception as exc:
-        _debug_log(f"Could not update description label: {repr(exc)}")
+        _debug_log(f"Could not update description label: {_safe_exc_str(exc)}")
 
 
 def on_send_downstream(kwargs: dict) -> None:

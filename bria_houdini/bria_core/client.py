@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import ssl
 import time
 import uuid
@@ -16,6 +18,43 @@ from .errors import BriaRequestError
 from .logging import get_logger
 
 logger = get_logger("bria_core.client")
+
+# ---------------------------------------------------------------------------
+# SSL certificate bundle detection (cross-platform)
+# ---------------------------------------------------------------------------
+# Houdini's embedded Python on macOS often can't locate system CA certs.
+# Rather than hardcoding a path in the static package JSON (which breaks
+# Windows), we detect the correct path at runtime.
+
+_CA_BUNDLE_CANDIDATES = [
+    "/etc/ssl/cert.pem",                          # macOS, some Linux
+    "/etc/ssl/certs/ca-certificates.crt",          # Debian/Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",            # RHEL/CentOS/Fedora
+    "/etc/ssl/ca-bundle.pem",                      # openSUSE
+    "/private/etc/ssl/cert.pem",                   # macOS alternate
+    "/opt/homebrew/etc/ca-certificates/cert.pem",  # Homebrew macOS
+]
+
+
+def _ensure_ssl_certs() -> None:
+    """Set SSL_CERT_FILE for Houdini's embedded Python if needed."""
+    existing = os.environ.get("SSL_CERT_FILE", "").strip()
+    if existing and os.path.isfile(existing):
+        return
+
+    if existing and not os.path.isfile(existing):
+        del os.environ["SSL_CERT_FILE"]
+
+    if platform.system() == "Windows":
+        return
+
+    for path in _CA_BUNDLE_CANDIDATES:
+        if os.path.isfile(path):
+            os.environ["SSL_CERT_FILE"] = path
+            return
+
+
+_ensure_ssl_certs()
 
 _FALLBACK_RETRY_STATUS_CODES = {415, 460}
 

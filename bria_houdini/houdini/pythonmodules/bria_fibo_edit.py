@@ -7,6 +7,7 @@ from bria_core.status import get_status
 from houdini.nodes.fibo_edit import fibo_edit_bria, on_fibo_edit
 from houdini.vgl_parms import (
     on_parse_vgl,
+    sync_vgl_to_json,
     on_refresh_upstream,
     clear_vgl_parms,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "fibo_edit_bria",
     "on_fibo_edit",
     "on_parse_vgl",
+    "sync_vgl_to_json",
     "on_refresh_upstream",
     "clear_vgl_parms",
     "build_history_menu",

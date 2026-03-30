@@ -328,8 +328,30 @@ def on_parse_vgl(kwargs: dict) -> None:
     hou.ui.setStatusMessage(f"Parsed VGL into {populated} section(s).")
 
 
+def sync_vgl_to_json(kwargs: dict) -> None:
+    """Assemble the organized VGL fields back into the raw JSON parm."""
+    node = kwargs.get("node")
+    if node is None:
+        return
+    json_str = assemble_from_parms(node)
+    if not json_str:
+        hou.ui.setStatusMessage(
+            "No VGL fields to assemble \u2014 fill in the structured fields first.",
+            severity=hou.severityType.Warning,
+        )
+        return
+    sp_parm = node.parm("structured_prompt")
+    if sp_parm:
+        sp_parm.set(json_str)
+    hou.ui.setStatusMessage("Raw JSON updated from structured fields.")
+
+
 def on_refresh_upstream(kwargs: dict) -> None:
-    """Pull latest result_json from connected upstream node."""
+    """Pull structured prompt JSON from the connected upstream node.
+
+    Checks ``result_json`` first (Generate Structured Prompt node), then
+    falls back to ``structured_prompt`` (FIBO Generate, FIBO Edit, etc.).
+    """
     node = kwargs.get("node")
     if node is None:
         return
@@ -342,10 +364,14 @@ def on_refresh_upstream(kwargs: dict) -> None:
         )
         return
 
+    # Try result_json first (Generate Structured Prompt node stores here)
     result_parm = input_op.parm("result_json")
     if not result_parm:
+        # Fall back to structured_prompt (FIBO Generate, FIBO Edit, etc.)
+        result_parm = input_op.parm("structured_prompt")
+    if not result_parm:
         hou.ui.setStatusMessage(
-            "Upstream node has no result_json parm.",
+            "Upstream node has no structured prompt data.",
             severity=hou.severityType.Warning,
         )
         return
@@ -353,7 +379,7 @@ def on_refresh_upstream(kwargs: dict) -> None:
     json_val = (result_parm.eval() or "").strip()
     if not json_val:
         hou.ui.setStatusMessage(
-            "Upstream result_json is empty \u2014 generate a structured prompt first.",
+            "Upstream structured prompt is empty \u2014 run the upstream node first.",
             severity=hou.severityType.Warning,
         )
         return

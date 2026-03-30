@@ -595,14 +595,9 @@ def on_open_result_folder(kwargs: dict) -> None:
             )
         return
 
-    system = platform.system()
     try:
-        if system == "Darwin":
-            subprocess.Popen(["open", folder])
-        elif system == "Windows":
-            os.startfile(folder)
-        else:
-            subprocess.Popen(["xdg-open", folder])
+        from bria_core.utils import open_in_os
+        open_in_os(folder)
     except Exception as exc:
         if hou is not None:
             hou.ui.displayMessage(

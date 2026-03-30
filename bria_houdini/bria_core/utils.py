@@ -169,6 +169,55 @@ def validate_bria_image_file(path: str, label: str) -> None:
                 )
 
 
+def ensure_api_aspect_ratio(
+    path: str,
+    min_ratio: float = 0.56,
+    max_ratio: float = 1.78,
+) -> str:
+    """Check image aspect ratio and center-crop if outside API bounds.
+
+    The Bria API requires aspect ratios between 0.5 and 1.8.
+    Uses conservative bounds (0.56–1.78) to avoid boundary rejection.
+    Returns the (possibly modified) path.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return path
+
+    try:
+        with Image.open(path) as img:
+            w, h = img.size
+            if h == 0 or w == 0:
+                return path
+            ratio = w / h
+
+            if min_ratio <= ratio <= max_ratio:
+                return path
+
+            if ratio > max_ratio:
+                new_w = int(h * max_ratio)
+                left = (w - new_w) // 2
+                cropped = img.crop((left, 0, left + new_w, h))
+            else:
+                new_h = int(w / min_ratio)
+                top = (h - new_h) // 2
+                cropped = img.crop((0, top, w, top + new_h))
+
+            fmt = img.format or "PNG"
+            cropped.save(path, format=fmt)
+            new_ratio = cropped.size[0] / cropped.size[1]
+            import logging as _logging
+            _logging.getLogger("bria.utils").info(
+                "[Bria] Aspect ratio %.4f outside API bounds [%s–%s]; cropped %dx%d → %dx%d (ratio=%.4f)",
+                ratio, min_ratio, max_ratio, w, h, cropped.size[0], cropped.size[1], new_ratio,
+            )
+    except Exception:
+        pass
+
+    return path
+
+
 def _non_empty(value: object) -> str | None:
     if value is None:
         return None
@@ -228,3 +277,20 @@ def resolve_temp_dir(dcc_module: object | None = None, fallback: str = ".") -> s
             continue
 
     return "."
+
+
+def open_in_os(path: str) -> None:
+    """Open a file or folder with the OS default handler (macOS/Windows/Linux)."""
+    import platform
+    import subprocess
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", path])
+        elif system == "Windows":
+            os.startfile(path)
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        pass
