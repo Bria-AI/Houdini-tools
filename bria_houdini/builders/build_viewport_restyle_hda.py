@@ -22,8 +22,8 @@ else:
 HDA_NAME = "bria_viewport_restyle"
 HDA_LABEL = "Bria Viewport Restyle"
 HDA_VERSION = "1.5"
-HDA_FILE = os.path.join(_REPO_ROOT, "hda", "bria_viewport_restyle.hda")
-CORE_MODULE_PATH = os.path.join(_REPO_ROOT, "bria_houdini", "houdini", "nodes", "viewport_restyle.py")
+HDA_FILE = os.path.join(_REPO_ROOT, "bria_houdini", "otls", "bria_viewport_restyle.hda")
+CORE_MODULE_PATH = os.path.join(_REPO_ROOT, "bria_houdini", "nodes", "viewport_restyle.py")
 
 os.makedirs(os.path.dirname(HDA_FILE), exist_ok=True)
 

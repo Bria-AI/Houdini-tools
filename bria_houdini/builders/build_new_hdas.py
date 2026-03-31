@@ -21,8 +21,8 @@ if _THIS_DIR:
 else:
     _REPO_ROOT = os.environ.get("BRIA_HOUDINI_REPO", os.getcwd())
 
-HDAS_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "houdini", "hdas")
-PYMOD_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "houdini", "pythonmodules")
+HDAS_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "otls")
+PYMOD_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "pythonmodules")
 
 os.makedirs(HDAS_DIR, exist_ok=True)
 
@@ -674,7 +674,7 @@ def build_fibo_edit_recipes():
 
     # Preset menu data — inlined to avoid Houdini module-cache issues at build time.
     # Must stay in sync with CATEGORY_ORDER / PRESET_CATEGORIES in
-    # houdini/nodes/fibo_edit_recipes.py (the runtime source of truth).
+    # bria_houdini/nodes/fibo_edit_recipes.py (the runtime source of truth).
     _CATEGORIES = [
         ("custom",       "Custom"),
         ("style",        "Style"),
@@ -2458,14 +2458,14 @@ def build_top_bria_batch():
 
     # Set onGenerate callback body
     generate_body = (
-        "from houdini.nodes.top_bria_batch import generate_work_items\n"
+        "from bria_houdini.nodes.top_bria_batch import generate_work_items\n"
         "generate_work_items(self, item_holder, upstream_items, generation_type)"
     )
     pp.parm("generate").set(generate_body)
 
     # Set onCookTask callback body
     cooktask_body = (
-        "from houdini.nodes.top_bria_batch import cook_work_item\n"
+        "from bria_houdini.nodes.top_bria_batch import cook_work_item\n"
         "cook_work_item(self, work_item)"
     )
     pp.parm("cooktask").set(cooktask_body)
@@ -2864,7 +2864,7 @@ def build_top_bria_batch():
         correct_pm = textwrap.dedent("""\
             import hou
             import pdg
-            from houdini.nodes.top_bria_batch import (
+            from bria_houdini.nodes.top_bria_batch import (
                 generate_work_items, cook_work_item,
                 on_prompt_mode_changed, on_batch_category_changed,
                 on_batch_preset_changed,
