@@ -19,7 +19,7 @@ else:
 HDA_NAME = "bria_upscale"
 HDA_LABEL = "Bria Upscale"
 HDA_VERSION = "1.2.0"
-HDA_FILE = os.path.join(_REPO_ROOT, "hda", "bria_upscale.hda")
+HDA_FILE = os.path.join(_REPO_ROOT, "bria_houdini", "otls", "bria_upscale.hda")
 
 os.makedirs(os.path.dirname(HDA_FILE), exist_ok=True)
 

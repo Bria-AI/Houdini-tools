@@ -21,7 +21,7 @@ Point Houdini at the repo root:
 export HOUDINI_PACKAGE_DIR=/path/to/bria-houdini
 ```
 
-Launch Houdini. `bria_houdini.json` at the repo root uses relative paths to find everything automatically.
+Launch Houdini. `bria_houdini.json` at the repo root sets `path` to add `bria_houdini/` to `HOUDINI_PATH`, which auto-discovers `otls/`, `toolbar/`, and `python_panels/`.
 
 **Studio setup:** Add the repo path to your existing `HOUDINI_PACKAGE_DIR` (colon-separated on macOS/Linux, semicolon on Windows).
 
@@ -122,7 +122,7 @@ Watch Houdini's status bar and System Console for progress.
 ## Notes
 
 - `api_token` parm is deprecated. Prefer config/env-based auth.
-- Runtime export uses `houdini/cop_export.py` with tiered fallback:
+- Runtime export uses `bria_houdini/cop_export.py` with tiered fallback:
   1. Internal ROP (`rop_save_input` / `rop_save_mask`) when present
   2. Direct COP pixel export
   3. Exact-node temporary ROP

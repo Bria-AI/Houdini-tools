@@ -6,7 +6,7 @@ Note: `build_new_hdas.py` handles PythonModule embedding automatically for all 1
 
 ## What you paste
 
-- Source: `houdini/pythonmodules/bria_<node_name>.py`
+- Source: `bria_houdini/pythonmodules/bria_<node_name>.py`
 - Destination: your HDA Type Properties -> **Scripts** tab -> **PythonModule**
 
 Each PythonModule wrapper is a thin shim that imports from the corresponding `nodes/<node_name>.py` module. For example, `bria_genfill.py` imports and re-exports functions from `nodes/genfill.py`.
