@@ -24,5 +24,7 @@ backup/
 *.swp
 *.swo
 
+.claude/settings.local.json
+
 # Internal review docs (kept locally)
 Houdini_Integration_Code_Review_*.md

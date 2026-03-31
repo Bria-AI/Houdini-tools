@@ -1,0 +1,40 @@
+[project]
+name = "bria-houdini"
+description = "Bria.ai Python Houdini integration"
+version = "0.1.0"
+readme = "README.md"
+authors = [{ name = "Bria.ai" }]
+maintainers = [
+    { name = "daniel", email = "danielnaulin@bria.ai" },
+    { name = "omri", email = "omriassa@bria.ai" },
+]
+license = { text = "MIT" }
+keywords = ["bria", "houdini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Multimedia :: Graphics",
+]
+
+[project.urls]
+Homepage = "https://bria.ai"
+Documentation = "TODO"
+
+
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["C4", "E", "F", "I", "PERF", "UP"]
+ignore = ["PERF203", "E402", "F821"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
