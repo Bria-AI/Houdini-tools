@@ -24,6 +24,9 @@ backup/
 *.swp
 *.swo
 
+
+.venv/
+
 .claude/settings.local.json
 
 # Internal review docs (kept locally)
