@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Any
 
-from bria_core.dcc import DccNodeUtils, debug_logger
+from bria_houdini.bria_core.dcc import DccNodeUtils, debug_logger
 
 _meta_log = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def resolve_output_dir(temp_dir: str, run_id: str, node_name: str) -> str:
     1. Global project path (if use_bria_project_path is enabled and valid)
     2. Temp directory fallback
     """
-    from bria_core.config import load_config
+    from bria_houdini.bria_core.config import load_config
 
     cfg = load_config()
     if cfg.use_bria_project_path:

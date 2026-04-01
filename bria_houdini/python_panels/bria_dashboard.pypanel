@@ -8,7 +8,7 @@ Bria Dashboard Panel
 Provides API key setup for Bria Houdini integration.
 """
 
-from houdini.ui.bria_dashboard import createInterface, onActivateInterface, onDeactivateInterface
+from bria_houdini.ui.bria_dashboard import createInterface, onActivateInterface, onDeactivateInterface
 
 ]]></script>
         <help><![CDATA[

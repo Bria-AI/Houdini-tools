@@ -14,9 +14,9 @@ except Exception:  # pragma: no cover - only available inside Houdini
 import os
 import sys
 
-from bria_core import load_config, resolve_api_endpoint, resolve_api_key, get_status
-from bria_core.logging import configure_logging, get_logger
-from bria_core.errors import BriaConfigError
+from bria_houdini.bria_core import load_config, resolve_api_endpoint, resolve_api_key, get_status
+from bria_houdini.bria_core.logging import configure_logging, get_logger
+from bria_houdini.bria_core.errors import BriaConfigError
 
 
 _CA_BUNDLE_CANDIDATES = (

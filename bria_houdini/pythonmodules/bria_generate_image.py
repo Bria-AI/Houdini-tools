@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from bria_core.version import __version__
-from bria_core.status import get_status
+from bria_houdini.bria_core.version import __version__
+from bria_houdini.bria_core.status import get_status
 from bria_houdini.nodes.generate_image import generate_image_bria, on_generate_image
 from bria_houdini.vgl_parms import (
     on_parse_vgl,

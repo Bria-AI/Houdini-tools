@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from bria_core.version import __version__
-from bria_core.status import get_status
+from bria_houdini.bria_core.version import __version__
+from bria_houdini.bria_core.status import get_status
 from bria_houdini.nodes.erase import erase_bria, on_erase
 from bria_houdini.result_history import (
     build_history_menu,

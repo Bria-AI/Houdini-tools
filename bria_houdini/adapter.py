@@ -9,8 +9,8 @@ import os
 import re
 from typing import Dict, Optional
 
-from bria_core import BriaClient, load_config, resolve_api_endpoint, resolve_api_key, resolve_rmbg_endpoint
-from bria_core.utils import file_to_base64
+from bria_houdini.bria_core import BriaClient, load_config, resolve_api_endpoint, resolve_api_key, resolve_rmbg_endpoint
+from bria_houdini.bria_core.utils import file_to_base64
 
 
 def _mime_from_path(path: str) -> str:

@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from bria_core.utils import download_url, extract_image_url, resolve_temp_dir
+from bria_houdini.bria_core.utils import download_url, extract_image_url, resolve_temp_dir
 from bria_houdini.adapter import fibo_edit_from_files
 from bria_houdini.node_utils import _safe_exc_str, clamp_steps_num
 

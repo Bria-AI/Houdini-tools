@@ -1,9 +1,9 @@
-"""Thin HDA PythonModule wrapper for Bria Generate Structured Prompt."""
+"""Thin HDA PythonModule wrapper for Bria Generate VGL."""
 
 from __future__ import annotations
 
-from bria_core.version import __version__
-from bria_core.status import get_status
+from bria_houdini.bria_core.version import __version__
+from bria_houdini.bria_core.status import get_status
 from bria_houdini.nodes.generate_structured_prompt import (
     generate_structured_prompt_bria,
     on_generate_structured_prompt,

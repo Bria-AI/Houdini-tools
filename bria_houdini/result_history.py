@@ -39,7 +39,7 @@ def _result_dirs() -> list[str]:
 
     # 1. Project output path (if configured)
     try:
-        from bria_core.config import load_config
+        from bria_houdini.bria_core.config import load_config
 
         cfg = load_config()
         if cfg.use_bria_project_path:
@@ -596,7 +596,7 @@ def on_open_result_folder(kwargs: dict) -> None:
         return
 
     try:
-        from bria_core.utils import open_in_os
+        from bria_houdini.bria_core.utils import open_in_os
         open_in_os(folder)
     except Exception as exc:
         if hou is not None:

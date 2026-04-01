@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Optional
 
-from bria_core.utils import download_url, extract_image_url
+from bria_houdini.bria_core.utils import download_url, extract_image_url
 from bria_houdini.adapter import (
     fibo_edit_from_files,
     fibo_generate_from_payload,

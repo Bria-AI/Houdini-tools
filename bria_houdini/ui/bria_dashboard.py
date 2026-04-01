@@ -6,8 +6,8 @@ import logging
 import os
 from pathlib import Path
 
-from bria_core.config import resolve_config_path
-from bria_core.dashboard import (
+from bria_houdini.bria_core.config import resolve_config_path
+from bria_houdini.bria_core.dashboard import (
     DASHBOARD_API_KEYS_URL,
     DASHBOARD_LOGIN_URL,
     clear_dashboard_tokens,
@@ -18,7 +18,7 @@ from bria_core.dashboard import (
     token_fields_for_dcc,
     write_dashboard_config,
 )
-from bria_core.status import get_status
+from bria_houdini.bria_core.status import get_status
 
 logger = logging.getLogger(__name__)
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from bria_core.version import __version__
-from bria_core.status import get_status
+from bria_houdini.bria_core.version import __version__
+from bria_houdini.bria_core.status import get_status
 from bria_houdini.nodes.fibo_edit_presets import (
     fibo_edit_presets_bria,
     on_fibo_edit_presets,

@@ -15,8 +15,8 @@ from typing import Optional
 import hou
 import hdefereval
 
-from bria_core.errors import BriaConfigError, BriaRequestError
-from bria_core.utils import resolve_proxies, resolve_temp_dir
+from bria_houdini.bria_core.errors import BriaConfigError, BriaRequestError
+from bria_houdini.bria_core.utils import resolve_proxies, resolve_temp_dir
 from bria_houdini.adapter import generate_structured_prompt
 from bria_houdini.cop_export import export_via_internal_rop, cop_to_png, _safe_exc_str
 from bria_houdini.node_utils import (

@@ -13,14 +13,14 @@ from typing import Optional
 
 import hou
 import hdefereval
-from bria_core.utils import (
+from bria_houdini.bria_core.utils import (
     download_url,
     extract_image_url as _extract_image_url,
     resolve_proxies,
     resolve_temp_dir,
 )
 
-from bria_core.errors import BriaConfigError, BriaRequestError
+from bria_houdini.bria_core.errors import BriaConfigError, BriaRequestError
 from bria_houdini.adapter import fibo_generate_from_payload
 from bria_houdini.vgl_parms import assemble_from_parms
 from bria_houdini.node_utils import (

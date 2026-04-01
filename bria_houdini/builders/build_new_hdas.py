@@ -15,11 +15,25 @@ import os
 import textwrap
 
 # Resolve repo root relative to this script's location.
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else None
-if _THIS_DIR:
-    _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", ".."))
-else:
-    _REPO_ROOT = os.environ.get("BRIA_HOUDINI_REPO", os.getcwd())
+# When run via exec(open("<repo>/bria_houdini/builders/build_new_hdas.py").read()),
+# __file__ is not set, so we fall back to BRIA_HOUDINI_REPO env var or auto-detect
+# from the known directory structure (this file lives at <repo>/bria_houdini/builders/).
+def _find_repo_root():
+    # 1) Direct execution — __file__ is set correctly
+    if "__file__" in dir() and os.path.basename(__file__) == "build_new_hdas.py":
+        return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    # 2) Env var override
+    env = os.environ.get("BRIA_HOUDINI_REPO")
+    if env and os.path.isdir(env):
+        return env
+    # 3) Auto-detect: walk up from cwd looking for bria_houdini/builders/build_new_hdas.py
+    for candidate in [os.getcwd(), os.path.expanduser("~/Desktop/Houdini_Tool_Release"),
+                      os.path.expanduser("~/Desktop/Bria_Dev/bria-houdini")]:
+        if os.path.isfile(os.path.join(candidate, "bria_houdini", "builders", "build_new_hdas.py")):
+            return candidate
+    return os.getcwd()
+
+_REPO_ROOT = _find_repo_root()
 
 HDAS_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "otls")
 PYMOD_DIR = os.path.join(_REPO_ROOT, "bria_houdini", "pythonmodules")
@@ -1009,13 +1023,15 @@ def build_fibo_edit_recipes():
 # ===================================================================
 
 def build_generate_structured_prompt():
-    print("\n--- Building Bria Generate Structured Prompt ---")
+    print("\n--- Building Bria Generate VGL ---")
 
-    hda_file = os.path.join(HDAS_DIR, "bria_generate_structured_prompt.hda")
+    hda_file = os.path.join(HDAS_DIR, "bria_generate_vgl.hda")
     _remove_existing(hda_file)
+    # Remove old name if present
+    _remove_existing(os.path.join(HDAS_DIR, "bria_generate_structured_prompt.hda"))
 
     # Optional image input — text, image, or both → JSON out
-    hda_node, cop_net = _build_cop_hda("bria_generate_structured_prompt", "Bria Generate Structured Prompt", "1.0.0", hda_file, min_inputs=0, max_inputs=1)
+    hda_node, cop_net = _build_cop_hda("bria_generate_vgl", "Bria Generate VGL", "1.0.0", hda_file, min_inputs=0, max_inputs=1)
     hda_def = hda_node.type().definition()
 
     ptg = hou.ParmTemplateGroup()
@@ -1029,7 +1045,7 @@ def build_generate_structured_prompt():
     main.addParmTemplate(hou.SeparatorParmTemplate("sep1"))
 
     btn = hou.ButtonParmTemplate(
-        "generate", "Generate Structured Prompt",
+        "generate", "Generate VGL (Structured Prompt)",
         script_callback="hou.phm().on_generate_structured_prompt(kwargs)",
         script_callback_language=hou.scriptLanguage.Python,
     )
@@ -1074,8 +1090,8 @@ def build_generate_structured_prompt():
     except:
         pass
 
-    pymod = _load_pymodule("bria_generate_structured_prompt.py")
-    _finalize(hda_node, hda_def, hda_file, pymod, cop_net, "bria_generate_structured_prompt", max_inputs=1)
+    pymod = _load_pymodule("bria_generate_vgl.py")
+    _finalize(hda_node, hda_def, hda_file, pymod, cop_net, "bria_generate_vgl", max_inputs=1)
 
 
 # ===================================================================
@@ -2257,7 +2273,7 @@ def build_viewport_render():
     source_img.setItemGeneratorScript('''
 import os, glob, tempfile
 try:
-    from bria_core.utils import resolve_temp_dir
+    from bria_houdini.bria_core.utils import resolve_temp_dir
     import hou
     output_dir = resolve_temp_dir(hou)
 except Exception:
@@ -2345,11 +2361,6 @@ return menu
 
     hda_def.setParmTemplateGroup(ptg)
 
-    # NOTE: No auto-tab hiding needed for OBJ-level HDAs.  The Copernicus
-    # copy/paste index-shift issue (_finalize) is COP-specific.  OBJ auto-tabs
-    # (Transform, Subnet) are standard and expected by users.  The "advanced"
-    # folder is already hidden via adv.hide(True) in _add_advanced_folder().
-
     # --- PythonModule ---
     pymod = _load_pymodule("bria_viewport_render.py")
     hda_def.addSection("PythonModule", pymod)
@@ -2366,6 +2377,19 @@ return menu
     hou.hda.installFile(hda_file)
 
     _set_tool_submenu(hda_def, "Bria AI")
+    hda_def.save(hda_file)
+    hou.hda.installFile(hda_file)
+
+    # Hide inherited OBJ tabs — must happen after save+install so inherited parms exist
+    # Use definitionsInFile() — hda_node.type().definition() can return a stale reference
+    hda_def = hou.hda.definitionsInFile(hda_file)[0]
+    ptg = hda_def.parmTemplateGroup()
+    for tab_name in ("stdswitcher5", "stdswitcher5_1", "stdswitcher5_2"):
+        pt = ptg.find(tab_name)
+        if pt is not None:
+            pt.hide(True)
+            ptg.replace(tab_name, pt)
+    hda_def.setParmTemplateGroup(ptg)
     hda_def.save(hda_file)
     hou.hda.installFile(hda_file)
 
@@ -2935,7 +2959,7 @@ def build_all():
     print("  - Bria Enhancer")
     print("  - Bria FIBO Edit")
     print("  - Bria FIBO Edit Recipes")
-    print("  - Bria Generate Structured Prompt")
+    print("  - Bria Generate VGL")
     print("  - Bria FIBO Generate")
     print("  - Bria Expand")
     print("  - Bria RMBG")
