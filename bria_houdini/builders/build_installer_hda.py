@@ -10,11 +10,19 @@ import hou
 import os
 
 # Resolve repo root relative to this script's location.
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else None
-if _THIS_DIR:
-    _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", ".."))
-else:
-    _REPO_ROOT = os.environ.get("BRIA_HOUDINI_REPO", os.getcwd())
+def _find_repo_root():
+    if "__file__" in dir() and os.path.basename(__file__) == "build_installer_hda.py":
+        return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    env = os.environ.get("BRIA_HOUDINI_REPO")
+    if env and os.path.isdir(env):
+        return env
+    for candidate in [os.getcwd(), os.path.expanduser("~/Desktop/Houdini_Tool_Release"),
+                      os.path.expanduser("~/Desktop/Bria_Dev/bria-houdini")]:
+        if os.path.isfile(os.path.join(candidate, "bria_houdini", "builders", "build_installer_hda.py")):
+            return candidate
+    return os.getcwd()
+
+_REPO_ROOT = _find_repo_root()
 
 # Configuration
 HDA_NAME = "bria_installer"
@@ -164,6 +172,20 @@ def build_installer_hda():
     # Install into current session
     print("\nStep 6: Installing into current session...")
     hou.hda.installFile(HDA_FILE)
+
+    # Hide inherited OBJ subnet tabs — must happen after save+install
+    print("\nStep 6b: Hiding inherited tabs...")
+    hda_def = hou.hda.definitionsInFile(HDA_FILE)[0]
+    ptg = hda_def.parmTemplateGroup()
+    for tab_name in ("stdswitcher4", "stdswitcher4_1"):
+        pt = ptg.find(tab_name)
+        if pt is not None:
+            pt.hide(True)
+            ptg.replace(tab_name, pt)
+    hda_def.setParmTemplateGroup(ptg)
+    hda_def.save(HDA_FILE)
+    hou.hda.installFile(HDA_FILE)
+    print("  Inherited tabs hidden (Transform, Subnet)")
 
     obj_cat = hou.objNodeTypeCategory()
     if HDA_NAME in obj_cat.nodeTypes():

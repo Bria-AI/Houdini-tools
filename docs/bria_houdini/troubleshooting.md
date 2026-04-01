@@ -27,10 +27,7 @@ If your machine uses a custom bundle path, set `SSL_CERT_FILE` or `REQUESTS_CA_B
 
 ## Bria Dashboard not showing (shelf or panel missing)
 
-Check the package JSON is loaded and these env paths are set:
-
-- `HOUDINI_TOOLBAR_PATH` -> houdini/toolbar
-- `HOUDINI_PYTHON_PANEL_PATH` -> houdini/python_panels
+Check the package JSON is loaded. The `"path"` key in `bria_houdini.json` adds the package to `HOUDINI_PATH`, which auto-discovers `toolbar/` and `python_panels/`.
 
 After changes, restart Houdini. You can also reload shelves:
 

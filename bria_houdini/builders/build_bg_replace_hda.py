@@ -19,7 +19,7 @@ else:
 HDA_NAME = "bria_bg_replace"
 HDA_LABEL = "Bria BG Replace"
 HDA_VERSION = "1.2.0"
-HDA_FILE = os.path.join(_REPO_ROOT, "hda", "bria_bg_replace.hda")
+HDA_FILE = os.path.join(_REPO_ROOT, "bria_houdini", "otls", "bria_bg_replace.hda")
 
 os.makedirs(os.path.dirname(HDA_FILE), exist_ok=True)
 

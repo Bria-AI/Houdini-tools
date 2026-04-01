@@ -2,34 +2,11 @@
   "version": "1.0",
   "name": "bria_houdini",
   "description": "Bria Houdini integration (HDAs + API adapter).",
+  "path": "$HOUDINI_PACKAGE_PATH/bria_houdini",
   "env": [
-    {
-      "BRIA_HOUDINI_ROOT": {
-        "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini",
-        "method": "replace"
-      }
-    },
     {
       "PYTHONPATH": {
         "value": "$HOUDINI_PACKAGE_PATH/bria_houdini",
-        "method": "prepend"
-      }
-    },
-    {
-      "HOUDINI_OTLSCAN_PATH": {
-        "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/hdas",
-        "method": "prepend"
-      }
-    },
-    {
-      "HOUDINI_TOOLBAR_PATH": {
-        "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/toolbar",
-        "method": "prepend"
-      }
-    },
-    {
-      "HOUDINI_PYTHON_PANEL_PATH": {
-        "value": "$HOUDINI_PACKAGE_PATH/bria_houdini/houdini/python_panels",
         "method": "prepend"
       }
     }

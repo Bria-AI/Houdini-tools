@@ -1,5 +1,28 @@
 # Bria Houdini Integration - Changelog
 
+## v0.2.0 (2026-03-31)
+
+Package restructure to follow Houdini standard conventions. All bugs fixed, HDAs rebuilt, tested end-to-end.
+
+### Breaking Changes
+
+- **Import namespace:** `from houdini.*` changed to `from bria_houdini.*` to prevent collisions with Houdini's own namespace.
+- **Package layout:** `houdini/hdas/` moved to `otls/`, `houdini/toolbar/` to `toolbar/`, `houdini/python_panels/` to `python_panels/`. The `bria_houdini.json` package descriptor now uses Houdini's `path` key for auto-discovery.
+
+### Changes
+
+- **Renamed** Generate Structured Prompt to **Generate VGL** (HDA, pythonmodule, TAB menu label).
+- **Hidden inherited OBJ tabs** on Installer (Transform, Subnet) and Viewport Render (Transform, Render, Misc) — only the Bria-specific tab is visible.
+- **Fixed** `.pypanel` import path (`from houdini.ui.bria_dashboard` → `from bria_houdini.ui.bria_dashboard`).
+- **Fixed** all bare `from bria_core.*` imports across 21 files → `from bria_houdini.bria_core.*`.
+- **Simplified** `tools/dev/456.py` — removed redundant `sys.path` manipulation; bootstrap handled by `__init__.py`.
+- **Rebuilt** all 12 production HDAs and installer HDA with correct embedded imports.
+- **Robust build scripts** — `_find_repo_root()` with 3-tier fallback (direct exec, env var, auto-detect) for `exec(open(...).read())` compatibility.
+- **Updated example scene** — new `bria_ai_tools_example_v01.hipnc` with VGL nodes; removed 5 old dev/test scenes.
+- **User-Agent header** — all API calls include `User-Agent: BriaHoudini/<version>`.
+
+---
+
 ## v0.1.0 (2026-03-29)
 
 Initial release. 12 production HDAs + 9 experimental HDAs for Houdini 21.
@@ -16,7 +39,7 @@ Initial release. 12 production HDAs + 9 experimental HDAs for Houdini 21.
 - Bria FIBO Edit v2 -- prompt-based edit with basic or structured prompts (VGL)
 - Bria FIBO Edit Recipes -- categorized preset edits (11 categories, 90 presets)
 - Bria FIBO Generate -- text-to-image generation (basic or structured prompts)
-- Bria Generate Structured Prompt -- convert text/image into structured prompt JSON
+- Bria Generate VGL -- convert text/image into structured prompt JSON (renamed from Generate Structured Prompt in v0.2.0)
 
 **OBJ Node:**
 - Bria Viewport Render v2 -- capture 3D viewport, apply FIBO Edit AI styling with 22 presets across 5 categories, inline upscale (2x/3x), Apply Texture to geometry
