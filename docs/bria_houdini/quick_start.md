@@ -25,13 +25,9 @@ Launch Houdini. `bria_houdini.json` at the repo root sets `path` to add `bria_ho
 
 **Studio setup:** Add the repo path to your existing `HOUDINI_PACKAGE_DIR` (colon-separated on macOS/Linux, semicolon on Windows).
 
-### Experimental Tools
-
-After the main install, load `bria_experimental_installer.hda` and click **Install Experimental Tools**. Restart Houdini to see the experimental nodes.
-
 ## 2) Create the nodes
 
-### COP nodes (Copernicus Image Network)
+### COP nodes (Copernicus)
 
 In a COP network, press Tab and search:
 
@@ -44,7 +40,8 @@ In a COP network, press Tab and search:
 - `Bria FIBO Edit` -- prompt-based edit (basic or structured)
 - `Bria FIBO Edit Recipes` -- categorized preset edits
 - `Bria FIBO Generate` -- text-to-image generation
-- `Bria Generate Structured Prompt` -- convert text/image to structured prompt JSON
+- `Bria Generate VGL` -- convert text/image to structured prompt JSON
+- `Bria Sequence Output` -- batch render a COP chain with Bria AI nodes
 
 ### OBJ node
 
@@ -64,7 +61,8 @@ In a TOP network, Tab-search:
 |-----------|---------|---------|
 | Erase, GenFill | Image | Mask (white = edit area, black = keep) |
 | Enhancer, Upscale, RMBG, Expand, FIBO Edit, FIBO Edit Recipes | Image | -- |
-| FIBO Generate, Generate Structured Prompt | Optional reference image | -- |
+| FIBO Generate, Generate VGL | Optional reference image | -- |
+| Sequence Output | End of COP chain | -- |
 
 Masks must be **RGB/RGBA (8-bit)**. If your mask is a single-channel COP, convert it before the Bria node.
 
@@ -89,7 +87,8 @@ Environment variable override: `BRIA_API_KEY_HOUDINI`
 | FIBO Edit | Edit |
 | FIBO Edit Recipes | Edit |
 | FIBO Generate | Generate |
-| Generate Structured Prompt | Generate |
+| Generate VGL | Generate |
+| Sequence Output | Render Bria Sequence To Disk |
 | Viewport Render | Render and Style |
 | Batch | Cook (PDG) |
 
@@ -99,7 +98,7 @@ Watch Houdini's status bar and System Console for progress.
 
 ### Structured prompt generation
 
-1. Drop a **Bria Generate Structured Prompt** node (optionally connect a reference image)
+1. Drop a **Bria Generate VGL** node (optionally connect a reference image)
 2. Enter a text prompt and click **Generate**
 3. Connect output to a **Bria FIBO Generate** node
 4. Enable "Use Structured Prompt" on the Generate node

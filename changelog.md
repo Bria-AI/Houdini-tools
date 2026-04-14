@@ -1,35 +1,36 @@
 # Bria Houdini Integration - Changelog
 
-## v0.2.0 (2026-03-31)
+## v0.3.0 (2026-04-14)
 
-Package restructure to follow Houdini standard conventions. All bugs fixed, HDAs rebuilt, tested end-to-end.
+### New Features
 
-### Breaking Changes
+- **Bria Sequence Output** -- new COP HDA for batch rendering COP chains with Bria AI nodes across a frame range. Discovers upstream Bria nodes via DAG traversal, topologically sorts them, and cooks each per frame.
+- **VGL per-frame generation** -- Generate VGL nodes are now supported in Sequence Output. New **Lock VGL** toggle (default off) controls whether VGL regenerates per frame or stays constant.
+- **Batch TOP confirmation** -- popup warning before cooking that shows number of API calls, with Continue/Cancel. Warning label also added to node parameters.
+- **Default output path** -- results save to `~/Desktop/bria_houdini_tool_output/` when no project folder is set, with `XDG_DESKTOP_DIR` support for Linux. Falls back to temp directory only if Desktop is unavailable.
 
-- **Import namespace:** `from houdini.*` changed to `from bria_houdini.*` to prevent collisions with Houdini's own namespace.
-- **Package layout:** `houdini/hdas/` moved to `otls/`, `houdini/toolbar/` to `toolbar/`, `houdini/python_panels/` to `python_panels/`. The `bria_houdini.json` package descriptor now uses Houdini's `path` key for auto-discovery.
+### Bug Fixes
 
-### Changes
+- **VGL `objects` field** -- auto-inject empty `objects` array into structured prompts missing it, preventing 422 API errors when the VLM uses non-standard field names (e.g. `text_render`).
+- **Sequence Output: generate node support** -- FIBO Generate and Generate VGL nodes no longer require an input image connection.
+- **Sequence Output: compositing support** -- final frame export uses 3-tier strategy (internal ROP → COP pixels → upstream result_path) to support Houdini composite nodes (over, screen, etc.).
+- **Sequence Output: toggle parm respect** -- `use_basic_prompt` / `use_structured_prompt` toggles are now honored, preventing stale structured prompts from overriding basic prompts.
 
-- **Renamed** Generate Structured Prompt to **Generate VGL** (HDA, pythonmodule, TAB menu label).
-- **Hidden inherited OBJ tabs** on Installer (Transform, Subnet) and Viewport Render (Transform, Render, Misc) — only the Bria-specific tab is visible.
-- **Fixed** `.pypanel` import path (`from houdini.ui.bria_dashboard` → `from bria_houdini.ui.bria_dashboard`).
-- **Fixed** all bare `from bria_core.*` imports across 21 files → `from bria_houdini.bria_core.*`.
-- **Simplified** `tools/dev/456.py` — removed redundant `sys.path` manipulation; bootstrap handled by `__init__.py`.
-- **Rebuilt** all 12 production HDAs and installer HDA with correct embedded imports.
-- **Robust build scripts** — `_find_repo_root()` with 3-tier fallback (direct exec, env var, auto-detect) for `exec(open(...).read())` compatibility.
-- **Updated example scene** — new `bria_ai_tools_example_v01.hipnc` with VGL nodes; removed 5 old dev/test scenes.
-- **User-Agent header** — all API calls include `User-Agent: BriaHoudini/<version>`.
+### Documentation
 
----
+- Updated all references from 12 to 13 HDAs
+- Removed experimental tools section from all docs
+- Renamed Generate Structured Prompt to Generate VGL throughout
+- Added Sequence Output to all node lists, input tables, and action button tables
+- Copernicus naming consistency
 
 ## v0.1.0 (2026-03-29)
 
-Initial release. 12 production HDAs + 9 experimental HDAs for Houdini 21.
+Initial release. 13 production HDAs for Houdini 21.
 
 ### Production Nodes
 
-**COP Nodes (Copernicus Image Network):**
+**COP Nodes (Copernicus):**
 - Bria Enhancer -- enhance image quality (1MP/2MP/4MP), steps_num, seed
 - Bria Upscale v2 -- increase resolution (2x/4x)
 - Bria Erase v2 -- remove content under a mask (2-input: image + mask)
@@ -39,17 +40,14 @@ Initial release. 12 production HDAs + 9 experimental HDAs for Houdini 21.
 - Bria FIBO Edit v2 -- prompt-based edit with basic or structured prompts (VGL)
 - Bria FIBO Edit Recipes -- categorized preset edits (11 categories, 90 presets)
 - Bria FIBO Generate -- text-to-image generation (basic or structured prompts)
-- Bria Generate VGL -- convert text/image into structured prompt JSON (renamed from Generate Structured Prompt in v0.2.0)
+- Bria Generate VGL -- convert text/image into structured prompt JSON
+- Bria Sequence Output -- batch render a COP chain with Bria AI nodes across a frame range
 
 **OBJ Node:**
 - Bria Viewport Render v2 -- capture 3D viewport, apply FIBO Edit AI styling with 22 presets across 5 categories, inline upscale (2x/3x), Apply Texture to geometry
 
 **TOP Node (PDG):**
 - Bria Batch -- unified batch processing (Generate/Edit/Enhance/Upscale/RMBG modes), Edit mode supports 78 recipe presets across 9 categories, full PDG wedge attribute support
-
-### Experimental Nodes (9)
-
-Scene Builder, Image to 3D, Image to SOPs, Camera Manifest, Depth Lift, Splat Bridge, GSplat Scene, USD to VGL, VGL to USD.
 
 ### Features
 
