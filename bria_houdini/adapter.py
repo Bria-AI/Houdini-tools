@@ -5,6 +5,7 @@ This file is intentionally thin and only bridges Houdini context to bria_core.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Dict, Optional
@@ -553,6 +554,20 @@ def expand_from_files(
     )
 
 
+def _ensure_vgl_objects(payload: Dict[str, object]) -> None:
+    """Ensure structured prompt JSON contains the required 'objects' field."""
+    sp = payload.get("structured_prompt")
+    if not isinstance(sp, str):
+        return
+    try:
+        vgl = json.loads(sp)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if isinstance(vgl, dict) and "objects" not in vgl:
+        vgl["objects"] = []
+        payload["structured_prompt"] = json.dumps(vgl)
+
+
 def fibo_generate_from_payload(
     payload: Dict[str, object],
     pipeline: str = "standard",
@@ -565,6 +580,7 @@ def fibo_generate_from_payload(
     session: Optional[object] = None,
 ) -> Dict:
     """Call Bria FIBO generation endpoints with prepared payload."""
+    _ensure_vgl_objects(payload)
     cfg = load_config()
     endpoint = api_endpoint or resolve_api_endpoint(cfg)
     key = api_key or resolve_api_key("houdini", cfg)
