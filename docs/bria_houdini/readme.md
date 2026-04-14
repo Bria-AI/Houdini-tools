@@ -1,10 +1,10 @@
 # Bria Houdini HDA Reference (Houdini 21)
 
-This repo contains 12 mainstream HDAs and 9 experimental HDAs that talk to Bria's Image API.
+This repo contains HDAs that talk to Bria's Image API, built for Houdini's Copernicus image network.
 
-## Mainstream Tools (TAB menu: "Bria AI")
+## Tools (TAB menu: "Bria AI")
 
-### COP Nodes (Copernicus Image Network)
+### COP Nodes (Copernicus)
 
 - **Bria Enhancer**: enhance image quality to target resolution (1MP/2MP/4MP)
 - **Bria Upscale**: increase resolution via 2x or 4x multiplier
@@ -16,6 +16,7 @@ This repo contains 12 mainstream HDAs and 9 experimental HDAs that talk to Bria'
 - **Bria FIBO Edit Recipes**: categorized preset edits (weather, seasons, lighting, camera effects, etc.)
 - **Bria FIBO Generate**: text-to-image generation (basic or structured prompts)
 - **Bria Generate Structured Prompt**: convert text/image into structured prompt JSON for downstream nodes
+- **Bria Sequence Output**: batch render a COP chain with Bria AI nodes across a frame range
 
 ### OBJ Node
 
@@ -25,12 +26,6 @@ This repo contains 12 mainstream HDAs and 9 experimental HDAs that talk to Bria'
 
 - **Bria Batch**: unified batch processing supporting Generate, Edit, Enhance, Upscale, and RMBG modes via PDG work items
 
-## Experimental Tools (TAB menu: "Bria Experimental")
-
-Installed separately via the Bria Experimental Installer. Requires main tools installed first.
-
-Scene Builder, Image to 3D, Image to SOPs, Camera Manifest, Depth Lift, Splat Bridge, GSplat Scene, USD to VGL, VGL to USD.
-
 ## Input Configuration
 
 | Node | Input 1 | Input 2 |
@@ -38,6 +33,7 @@ Scene Builder, Image to 3D, Image to SOPs, Camera Manifest, Depth Lift, Splat Br
 | Erase, GenFill | Image | Mask (white = edit area) |
 | Enhancer, Upscale, RMBG, Expand, FIBO Edit, FIBO Edit Recipes | Image | -- |
 | FIBO Generate, Generate Structured Prompt | Optional reference image | -- |
+| Sequence Output | End of COP chain | -- |
 | Viewport Render | -- (captures 3D viewport) | -- |
 | Batch | -- (PDG work items) | -- |
 
@@ -73,9 +69,7 @@ The dashboard writes API keys into `~/.bria/bria.json`:
 - Production: `houdini_api_key` (used by default)
 - Staging/ComfyUI/MCP: stored for manual use
 
-## HDA Files
-
-### Mainstream (hdas/)
+## HDA Files (hdas/)
 
 ```
 bria_enhancer.hda
@@ -87,23 +81,10 @@ bria_expand_v2.hda
 bria_fibo_edit_v2.hda
 bria_fibo_edit_recipes.hda
 bria_fibo_generate.hda
-bria_generate_structured_prompt.hda
+bria_generate_vgl.hda
+bria_sequence_output.hda
 bria_viewport_render_v2.hda
 bria_batch.hda
-```
-
-### Experimental (hdas_experimental/)
-
-```
-bria_scene_builder.hda
-bria_image_to_3d.hda
-bria_image_to_sops.hda
-bria_camera_manifest.hda
-bria_depth_lift.hda
-bria_splat_bridge.hda
-bria_gsplat_scene.hda
-bria_usd_to_vgl.hda
-bria_vgl_to_usd.hda
 ```
 
 ## PythonModule Wrappers (pythonmodules/)
@@ -120,7 +101,8 @@ bria_expand.py            -> nodes/expand.py
 bria_fibo_edit.py         -> nodes/fibo_edit.py
 bria_fibo_edit_recipes.py -> nodes/fibo_edit_recipes.py
 bria_fibo_generate.py     -> nodes/fibo_generate.py
-bria_generate_structured_prompt.py -> nodes/generate_structured_prompt.py
+bria_generate_vgl.py      -> nodes/generate_structured_prompt.py
+bria_sequence_output.py   -> nodes/sequence_output.py
 bria_viewport_render.py   -> nodes/viewport_render.py
 ```
 

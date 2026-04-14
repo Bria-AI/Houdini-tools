@@ -2,7 +2,7 @@
 
 Use this guide when you want to wire the internal COP network manually but keep the Bria logic version-controlled.
 
-Note: `build_new_hdas.py` handles PythonModule embedding automatically for all 12 mainstream HDAs. This guide is for manual HDA building or custom modifications.
+Note: `build_new_hdas.py` handles PythonModule embedding automatically for all 13 mainstream HDAs. This guide is for manual HDA building or custom modifications.
 
 ## What you paste
 
@@ -71,4 +71,4 @@ For production builds, use `build_new_hdas.py` in the Houdini Python Shell:
 exec(open("/path/to/build_new_hdas.py").read())
 ```
 
-This builds all 12 mainstream HDAs with correct internal structure, parameter layouts, PythonModules, and input labels.
+This builds all 13 mainstream HDAs with correct internal structure, parameter layouts, PythonModules, and input labels.
