@@ -137,12 +137,28 @@ def extension_from_content_type(content_type: str | None) -> str | None:
     }.get((content_type or "").strip().lower())
 
 
+def _desktop_output_dir() -> str | None:
+    """Return ~/Desktop/bria_houdini_tool_output, creating it if needed."""
+    desktop = os.environ.get("XDG_DESKTOP_DIR", "").strip()
+    if not desktop or not os.path.isdir(desktop):
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.isdir(desktop):
+        return None
+    output_dir = os.path.join(desktop, "bria_houdini_tool_output")
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+    except Exception:
+        return None
+
+
 def resolve_output_dir(temp_dir: str, run_id: str, node_name: str) -> str:
     """Resolve the output directory for a Bria node result.
 
     Priority:
     1. Global project path (if use_bria_project_path is enabled and valid)
-    2. Temp directory fallback
+    2. ~/Desktop/bria_houdini_tool_output/
+    3. Temp directory fallback
     """
     from bria_houdini.bria_core.config import load_config
 
@@ -153,6 +169,11 @@ def resolve_output_dir(temp_dir: str, run_id: str, node_name: str) -> str:
             output_dir = os.environ.get("BRIA_PROJECT_PATH", "").strip()
         if output_dir and os.path.isdir(output_dir):
             return os.path.join(output_dir, f"bria_{node_name}_result_{run_id}.png")
+
+    desktop_dir = _desktop_output_dir()
+    if desktop_dir:
+        return os.path.join(desktop_dir, f"bria_{node_name}_result_{run_id}.png")
+
     return os.path.join(temp_dir, f"bria_{node_name}_result_{run_id}.png")
 
 
@@ -219,102 +240,39 @@ def apply_result_to_ui(cop_node, save_path: str, status_message: str) -> None:
     except Exception:
         pass
 
-    # 2. Set result_path parm
+    # 2. Set result_path parm — this drives everything via channel references.
+    #    Internal nodes use expressions that read from result_path:
+    #      loader_result.filename  -> chs("../result_path")
+    #      switch_result.input     -> strlen(chs("../result_path")) > 0
+    #    No allowEditingOfContents() needed — result_path is an HDA interface parm.
     result_parm = cop_node.parm("result_path") if cop_node is not None else None
     if result_parm is not None:
         result_parm.set(save_path)
 
-    # 3. Unlock HDA contents so we can modify internal nodes
-    try:
-        cop_node.allowEditingOfContents()
-    except Exception as exc:
-        _ui_log(f"allowEditingOfContents failed: {_safe_exc_str(exc)}")
-
-    # 4. Configure and load File node
-    loader = cop_node.node("loader_result") if cop_node is not None else None
-    if loader is not None:
-        # Copernicus File node requires AOV config to load images
-        if loader.parm("aovs") is not None:
-            loader.parm("aovs").set(1)
-        if loader.parm("aov1") is not None:
-            loader.parm("aov1").set("C")
-        # Try different filename parameter names (varies by Houdini version/context)
-        for pname in ("file", "filename1", "filename"):
-            fp = loader.parm(pname)
-            if fp is not None:
-                fp.set(save_path)
-                _ui_log(f"loader {pname} set to {save_path}")
-                break
-
-        # pressButton("reload") can hang on macOS (see cop_export.py).
-        # Setting a new file path above already triggers the node to reload.
-        if sys.platform != "darwin":
-            if loader.parm("reload") is not None:
-                loader.parm("reload").pressButton()
-
-        try:
-            loader.cook(force=True)
-            _ui_log("loader cook OK")
-        except Exception as exc:
-            _ui_log(f"loader cook failed: {_safe_exc_str(exc)}")
-
-    # 5. Wire switch and toggle to result
-    switch = cop_node.node("switch_result") if cop_node is not None else None
+    # 3. Force cook outputs to propagate the new image through the COP pipeline
     cop_outputs = cop_node.node("outputs") if cop_node is not None else None
-
-    if switch is not None:
-        # Ensure loader_result is wired into the switch
-        try:
-            if loader is not None:
-                switch.setInput(1, loader)
-        except Exception as exc:
-            _ui_log(f"switch setInput failed: {_safe_exc_str(exc)}")
-        # Ensure switch is wired to Copernicus outputs
-        if cop_outputs is not None:
-            try:
-                cop_outputs.setInput(0, None)
-                cop_outputs.setInput(0, switch)
-            except Exception as exc:
-                _ui_log(f"outputs setInput failed: {_safe_exc_str(exc)}")
-        if switch.parm("input") is not None:
-            try:
-                switch.parm("input").set(1)  # input 0=pass-through, 1=result
-            except Exception as exc:
-                _ui_log(f"switch toggle failed: {_safe_exc_str(exc)}")
-    elif loader is not None and cop_outputs is not None:
-        # No switch node — wire loader directly to Copernicus outputs
-        try:
-            cop_outputs.setInput(0, None)
-            cop_outputs.setInput(0, loader)
-        except Exception as exc:
-            _ui_log(f"direct wire failed: {_safe_exc_str(exc)}")
-
-    # 6. Force cook outputs to propagate the new image through the COP pipeline
     if cop_outputs is not None:
         try:
             cop_outputs.cook(force=True)
             _ui_log("outputs cook OK")
         except Exception as exc:
             _ui_log(f"outputs cook failed: {_safe_exc_str(exc)}")
-        # Ensure display flag is set so viewer picks up the result
         try:
             cop_outputs.setDisplayFlag(True)
         except Exception:
             pass
 
-    # 7. Force viewport to notice the updated COP data
+    # 4. Force viewport to notice the updated COP data
     try:
         hou.ui.triggerUpdate()
     except Exception:
         pass
 
-    # 8. Status message
+    # 5. Status message
     if status_message:
         hou.ui.setStatusMessage(status_message)
 
-    # 9. Open result in MPlay if the toggle is enabled.
-    # MPlay reads files from disk (no COP pixel pipeline), so it bypasses
-    # Houdini Non-Commercial watermarks and resolution limits.
+    # 6. Open result in MPlay if the toggle is enabled.
     try:
         mplay_parm = cop_node.parm("open_in_mplay") if cop_node is not None else None
         if mplay_parm and mplay_parm.eval():
