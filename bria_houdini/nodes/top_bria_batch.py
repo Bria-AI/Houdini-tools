@@ -73,6 +73,23 @@ def generate_work_items(node, item_holder, upstream_items, generation_type):
     if mode not in _ALL_MODES:
         raise RuntimeError(f"Unknown mode: {mode}")
 
+    # Warn user about multiple API calls
+    num_items = len(upstream_items) if upstream_items else 1
+    try:
+        confirm = hou.ui.displayMessage(
+            f"This will launch {num_items} API call(s) to Bria.\n\n"
+            f"Mode: {mode.upper()}\n"
+            "Each work item makes a separate API request.\n\n"
+            "Continue?",
+            buttons=("Continue", "Cancel"),
+            severity=hou.severityType.Warning,
+            title="Bria Batch",
+        )
+        if confirm == 1:
+            return
+    except Exception:
+        pass
+
     # Read common parms
     prompt = top_node.parm("prompt").evalAsString().strip()
     structured_prompt = top_node.parm("structured_prompt").evalAsString().strip()
@@ -157,11 +174,34 @@ def _set_common_attrs(new_item, upstream_item, mode, prompt, structured_prompt,
         _set_str_attr(new_item, upstream_item, "structured_prompt", structured_prompt)
         _set_str_attr(new_item, upstream_item, "negative_prompt", negative_prompt)
         _set_int_attr(new_item, upstream_item, "seed", seed)
+        _set_str_attr(new_item, upstream_item, "output_path", "")
     else:
         new_item.setStringAttrib("prompt", prompt)
         new_item.setStringAttrib("structured_prompt", structured_prompt)
         new_item.setStringAttrib("negative_prompt", negative_prompt)
         new_item.setIntAttrib("seed", seed)
+
+    # Auto-generate output_path from output_dir + output_suffix parms
+    existing_op = ""
+    try:
+        existing_op = new_item.attribValue("output_path") or ""
+    except Exception:
+        pass
+    if not existing_op:
+        out_dir = top_node.parm("output_dir").evalAsString().strip() if top_node.parm("output_dir") else ""
+        suffix = top_node.parm("output_suffix").evalAsString().strip() if top_node.parm("output_suffix") else ""
+        if out_dir or suffix:
+            inp = ""
+            try:
+                inp = new_item.attribValue("input_image") or ""
+            except Exception:
+                pass
+            if inp:
+                basename = os.path.splitext(os.path.basename(inp))[0]
+                ext = os.path.splitext(inp)[1] or ".png"
+                filename = basename + suffix + ext
+                save_dir = out_dir if out_dir else os.path.dirname(inp)
+                new_item.setStringAttrib("output_path", os.path.join(save_dir, filename))
 
     # Mode-specific attributes from TOP node parms
     if mode in (MODE_GENERATE, MODE_EDIT):
@@ -600,22 +640,37 @@ def _cook_rmbg(node, work_item) -> str:
 # ------------------------------------------------------------------
 
 def _download_result(data: dict, work_item, prefix: str) -> str:
-    """Extract image URL from API response, download, and save to temp dir."""
+    """Extract image URL from API response, download, and save.
+
+    If the work item has an ``output_path`` attribute (set by an upstream
+    Python Script TOP or auto-generated from output_dir/output_suffix parms),
+    the result is saved there.  Otherwise falls back to the temp directory.
+    """
     dl_url = extract_image_url(data)
     if not dl_url:
         raise RuntimeError(f"No image_url in API response: {data}")
 
     img_bytes, _content_type = download_url(dl_url, timeout_s=300)
 
-    output_dir = work_item.tempDir
-    index = work_item.index
-    input_image = work_item.attribValue("input_image") or ""
-    if input_image:
-        basename = os.path.splitext(os.path.basename(input_image))[0]
-    else:
-        basename = "generated"
+    # Use upstream output_path if set, otherwise auto-generate in temp dir
+    custom_output = ""
+    try:
+        custom_output = work_item.attribValue("output_path") or ""
+    except Exception:
+        pass
 
-    output_path = os.path.join(output_dir, f"bria_{prefix}_{basename}_{index:04d}.png")
+    if custom_output:
+        output_path = custom_output
+    else:
+        output_dir = work_item.tempDir
+        index = work_item.index
+        input_image = work_item.attribValue("input_image") or ""
+        if input_image:
+            basename = os.path.splitext(os.path.basename(input_image))[0]
+        else:
+            basename = "generated"
+        output_path = os.path.join(output_dir, f"bria_{prefix}_{basename}_{index:04d}.png")
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     with open(output_path, "wb") as fh:
