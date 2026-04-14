@@ -30,7 +30,7 @@ No explicit env vars needed for these -- Houdini finds them automatically.
 ### Full layout
 
     bria_houdini/
-    ├── otls/              # 12 production HDAs
+    ├── otls/              # Production HDAs
     ├── toolbar/           # "Bria AI" shelf
     ├── python_panels/     # Bria Dashboard panel
     ├── config/Icons/      # Node icons

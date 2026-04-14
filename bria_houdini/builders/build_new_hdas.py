@@ -481,10 +481,12 @@ def _wire_internals(hda_node, max_inputs):
             loader.parm("aovs").set(1)
         if loader.parm("aov1") is not None:
             loader.parm("aov1").set("C")
-        fp = loader.parm("filename1") or loader.parm("file") or loader.parm("filename")
+        # Set channel reference so loader reads from HDA's result_path parm.
+        # This eliminates the need for allowEditingOfContents() at runtime.
+        fp = loader.parm("filename") or loader.parm("filename1") or loader.parm("file")
         if fp:
-            fp.set("default.pic")
-        print(f"  Configured loader_result (aovs=1, aov1=C)")
+            fp.setExpression('chs("../result_path")', hou.exprLanguage.Hscript)
+        print(f"  Configured loader_result (aovs=1, aov1=C, filename -> chs result_path)")
 
     if switch is not None:
         if max_inputs > 0 and cop_inputs is not None:
@@ -498,6 +500,11 @@ def _wire_internals(hda_node, max_inputs):
             cop_outputs.setInput(0, None)
             cop_outputs.setInput(0, switch)
             print(f"  Wired switch_result -> outputs")
+        # Set switch to auto-toggle based on whether result_path is populated.
+        # 0 = pass-through (no result yet), 1 = show result.
+        if switch.parm("input") is not None:
+            switch.parm("input").setExpression('strlen(chs("../result_path")) > 0', hou.exprLanguage.Hscript)
+            print(f"  Set switch_result expression -> auto-toggle on result_path")
     elif loader is not None and cop_outputs is not None:
         cop_outputs.setInput(0, None)
         cop_outputs.setInput(0, loader)
@@ -1041,6 +1048,7 @@ def build_generate_structured_prompt():
 
     main.addParmTemplate(hou.StringParmTemplate("prompt", "Text Prompt", 1, default_value=[""]))
     main.addParmTemplate(hou.IntParmTemplate("seed", "Seed", 1, default_value=(0,), min=0, max=999999))
+    main.addParmTemplate(hou.ToggleParmTemplate("lock_vgl", "Lock VGL", default_value=False))
 
     main.addParmTemplate(hou.SeparatorParmTemplate("sep1"))
 
@@ -2380,18 +2388,18 @@ return menu
     hda_def.save(hda_file)
     hou.hda.installFile(hda_file)
 
-    # Hide inherited OBJ tabs — must happen after save+install so inherited parms exist
-    # Use definitionsInFile() — hda_node.type().definition() can return a stale reference
+    # Hide inherited OBJ tabs via DialogScript (hide()/setConditional() don't persist)
+    import re
     hda_def = hou.hda.definitionsInFile(hda_file)[0]
-    ptg = hda_def.parmTemplateGroup()
-    for tab_name in ("stdswitcher5", "stdswitcher5_1", "stdswitcher5_2"):
-        pt = ptg.find(tab_name)
-        if pt is not None:
-            pt.hide(True)
-            ptg.replace(tab_name, pt)
-    hda_def.setParmTemplateGroup(ptg)
-    hda_def.save(hda_file)
-    hou.hda.installFile(hda_file)
+    ds_section = hda_def.sections().get("DialogScript")
+    if ds_section:
+        ds = ds_section.contents()
+        for tab_name in ("stdswitcher5", "stdswitcher5_1", "stdswitcher5_2"):
+            ds = re.sub(r'(name\s+"' + tab_name + r'")', r'\1\n\tinvisible', ds)
+        ds_section.setContents(ds)
+        hda_def.save(hda_file)
+        hou.hda.installFile(hda_file)
+        print("  Inherited OBJ tabs hidden via DialogScript")
 
     # --- Cleanup ---
     try:
@@ -2620,6 +2628,14 @@ def build_top_bria_batch():
     _HIDE_NO_MODERATION = '{ mode != "enhancer" mode != "upscale" mode != "rmbg" }'
     _HIDE_NO_ALPHA = '{ mode != "enhancer" mode != "upscale" mode != "rmbg" }'
 
+    # ---- API warning ----
+    warn_label = hou.LabelParmTemplate(
+        "api_warning", "",
+        column_labels=["WARNING: Running this node will launch multiple API calls"],
+    )
+    ptg.addParmTemplate(warn_label)
+    ptg.addParmTemplate(hou.SeparatorParmTemplate("warn_sep"))
+
     # ---- Mode selector ----
     mode_parm = hou.MenuParmTemplate(
         "mode", "Mode",
@@ -2822,6 +2838,27 @@ def build_top_bria_batch():
     )
     ptg.addParmTemplate(max_concurrent_parm)
 
+    # --- Output naming ---
+    output_dir_parm = hou.StringParmTemplate(
+        "output_dir", "Output Directory", 1,
+        default_value=[""],
+        string_type=hou.stringParmType.FileReference,
+    )
+    output_dir_parm.setHelp(
+        "Directory for output files. Leave empty to use temp dir."
+    )
+    ptg.addParmTemplate(output_dir_parm)
+
+    output_suffix_parm = hou.StringParmTemplate(
+        "output_suffix", "Output Suffix", 1,
+        default_value=[""],
+    )
+    output_suffix_parm.setHelp(
+        "Suffix appended to input filename (e.g. '__sketch1'). "
+        "Leave empty to keep default auto-generated names."
+    )
+    ptg.addParmTemplate(output_suffix_parm)
+
     mplay_parm = hou.ToggleParmTemplate(
         "open_in_mplay", "Open Results in MPlay", default_value=True,
     )
@@ -2929,6 +2966,120 @@ def build_top_bria_batch():
 
 
 # ===================================================================
+# 13. BRIA SEQUENCE OUTPUT (COP — batch render through Bria chain)
+# ===================================================================
+
+def build_sequence_output():
+    print("\n--- Building Bria Sequence Output ---")
+
+    hda_file = os.path.join(HDAS_DIR, "bria_sequence_output.hda")
+    _remove_existing(hda_file, base_name="bria_sequence_output")
+
+    hda_node, cop_net = _build_cop_hda(
+        "bria_sequence_output", "Bria Sequence Output", "1.0", hda_file, num_inputs=1,
+    )
+    hda_def = hda_node.type().definition()
+
+    ptg = hou.ParmTemplateGroup()
+
+    # --- Render tab ---
+    render_tab = hou.FolderParmTemplate("render", "Render", folder_type=hou.folderType.Tabs)
+
+    # Frame range
+    render_tab.addParmTemplate(hou.IntParmTemplate(
+        "frame_start", "Start Frame", 1,
+        default_expression=("$FSTART",),
+        default_expression_language=(hou.scriptLanguage.Hscript,),
+    ))
+    render_tab.addParmTemplate(hou.IntParmTemplate(
+        "frame_end", "End Frame", 1,
+        default_expression=("$FEND",),
+        default_expression_language=(hou.scriptLanguage.Hscript,),
+    ))
+    render_tab.addParmTemplate(hou.IntParmTemplate(
+        "frame_step", "Frame Step", 1,
+        default_value=(1,), min=1, max=100,
+        min_is_strict=True, max_is_strict=False,
+    ))
+
+    render_tab.addParmTemplate(hou.SeparatorParmTemplate("sep_output"))
+
+    # Output path
+    op_parm = hou.StringParmTemplate(
+        "output_path", "Output Path", 1,
+        default_value=["$HIP/render/$HIPNAME.$OS.$F4.png"],
+        string_type=hou.stringParmType.FileReference,
+    )
+    op_parm.setTags({"filechooser_pattern": "*.png *.jpg *.exr"})
+    render_tab.addParmTemplate(op_parm)
+
+    render_tab.addParmTemplate(hou.SeparatorParmTemplate("sep_render_btn"))
+
+    # Render button
+    render_btn = hou.ButtonParmTemplate(
+        "render_sequence", "Render Bria Sequence To Disk",
+        script_callback="hou.phm().on_render(kwargs)",
+        script_callback_language=hou.scriptLanguage.Python,
+    )
+    render_tab.addParmTemplate(render_btn)
+
+    render_tab.addParmTemplate(hou.SeparatorParmTemplate("sep_chain"))
+
+    # Refresh chain + chain info
+    refresh_btn = hou.ButtonParmTemplate(
+        "refresh_chain", "Refresh Chain Info",
+        script_callback="hou.phm().on_refresh_chain(kwargs)",
+        script_callback_language=hou.scriptLanguage.Python,
+    )
+    render_tab.addParmTemplate(refresh_btn)
+
+    ci_parm = hou.StringParmTemplate(
+        "chain_info", "Chain Info", 1,
+        default_value=["(click Refresh Chain Info)"],
+    )
+    ci_parm.setConditional(hou.parmCondType.DisableWhen, "{ chain_info != __never_match__ }")
+    render_tab.addParmTemplate(ci_parm)
+
+    # Status (live progress during render)
+    st_parm = hou.StringParmTemplate(
+        "status", "Status", 1, default_value=[""],
+    )
+    st_parm.setConditional(hou.parmCondType.DisableWhen, "{ status != __never_match__ }")
+    render_tab.addParmTemplate(st_parm)
+
+    ptg.append(render_tab)
+
+    # --- Info tab ---
+    info = hou.FolderParmTemplate("info", "Info", folder_type=hou.folderType.Tabs)
+    info.addParmTemplate(hou.LabelParmTemplate(
+        "info_hda", "HDA:", column_labels=["Bria Sequence Output v1.0"],
+    ))
+    info.addParmTemplate(hou.LabelParmTemplate(
+        "info_about", "About:", column_labels=[
+            "Batch render a COP chain with Bria AI nodes. "
+            "Place at the end of your comp, set frame range and output path, "
+            "then click Render."
+        ],
+    ))
+    ptg.append(info)
+
+    # result_path parm (hidden, required by _wire_internals for pass-through wiring)
+    rp = hou.StringParmTemplate("result_path", "Result Path", 1, default_value=[""])
+    rp.hide(True)
+    ptg.append(rp)
+
+    hda_def.setParmTemplateGroup(ptg)
+
+    try:
+        hda_def.setIcon("ROP_mantra")
+    except Exception:
+        pass
+
+    pymod = _load_pymodule("bria_sequence_output.py")
+    _finalize(hda_node, hda_def, hda_file, pymod, cop_net, "bria_sequence_output")
+
+
+# ===================================================================
 # MAIN
 # ===================================================================
 
@@ -2949,9 +3100,10 @@ def build_all():
     build_genfill()
     build_viewport_render()
     build_top_bria_batch()
+    build_sequence_output()
 
     print("\n" + "=" * 50)
-    print("ALL 12 HDAs BUILT!")
+    print("ALL 13 HDAs BUILT!")
     print("=" * 50)
     print("\nNew HDAs saved to:", HDAS_DIR)
     print("\nTo use: restart Houdini (if Bria package is installed),")
@@ -2968,6 +3120,7 @@ def build_all():
     print("  - Bria GenFill")
     print("  - Bria Viewport Render")
     print("  - Bria Batch (TOP) — unified batch processor")
+    print("  - Bria Sequence Output (COP) — batch render through Bria chain")
 
 
 # To build everything:    exec(open("build_new_hdas.py").read()); build_all()
