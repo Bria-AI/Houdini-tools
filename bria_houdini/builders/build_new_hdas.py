@@ -216,7 +216,8 @@ def _load_pymodule(filename):
 
 def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
                           tab_label="VGL Editor", disable_condition=None,
-                          show_refresh_upstream=True):
+                          show_refresh_upstream=True, prefix="",
+                          mode_toggle=None):
     """Build the VGL Editor / Structured Prompt tab.
 
     Used by FIBO Generate, FIBO Edit, FIBO Edit Recipes, and Viewport Render.
@@ -234,8 +235,22 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
         show_refresh_upstream: If True (default), include the "Refresh from
             Upstream" button. Set to False for nodes without COP inputs
             (e.g. Viewport Render).
+        prefix: Optional prefix for folder parameter names to avoid collisions
+            when multiple HDAs with VGL tabs are built in the same session.
+        mode_toggle: Optional tuple (parm_name, label, callback) to insert a
+            mode toggle at the top of the tab (e.g. "Use Structured Prompt").
     """
-    vgl_tab = hou.FolderParmTemplate("vgl_editor", tab_label, folder_type=hou.folderType.Tabs)
+    p = prefix  # short alias
+    vgl_tab = hou.FolderParmTemplate(f"{p}vgl_editor", tab_label, folder_type=hou.folderType.Tabs)
+
+    # Insert mode toggle at top if requested (avoids setParmTemplates collision)
+    if mode_toggle:
+        toggle_name, toggle_label, toggle_cb = mode_toggle
+        mt = hou.ToggleParmTemplate(toggle_name, toggle_label, default_value=False)
+        mt.setScriptCallback(toggle_cb)
+        mt.setScriptCallbackLanguage(hou.scriptLanguage.Python)
+        vgl_tab.addParmTemplate(mt)
+        vgl_tab.addParmTemplate(hou.SeparatorParmTemplate(f"{p}struct_sep0"))
 
     def _apply_disable(tmpl):
         """Apply the disable condition to a parm/folder template if set."""
@@ -255,7 +270,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(hou.SeparatorParmTemplate("vgl_sep1"))
 
     # --- Scene & Background (collapsible, single multi-line text) ---
-    scene_folder = hou.FolderParmTemplate("vgl_folder_scene", "Scene & Background",
+    scene_folder = hou.FolderParmTemplate(f"{p}vgl_folder_scene", "Scene & Background",
                                            folder_type=hou.folderType.Collapsible)
     scene_parm = hou.StringParmTemplate("vgl_scene_text", "", 1, default_value=[""])
     scene_parm.setTags({"editor": "1", "editorLines": "3"})
@@ -319,7 +334,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(_apply_disable(obj_block))
 
     # --- Lighting (collapsible, 3 individual fields) ---
-    light_folder = hou.FolderParmTemplate("vgl_folder_lighting", "Lighting",
+    light_folder = hou.FolderParmTemplate(f"{p}vgl_folder_lighting", "Lighting",
                                            folder_type=hou.folderType.Collapsible)
     for suffix, label in [("cond", "Conditions"), ("dir", "Direction"), ("shadows", "Shadows")]:
         parm = hou.StringParmTemplate(f"vgl_lighting_{suffix}", label, 1, default_value=[""])
@@ -327,7 +342,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(_apply_disable(light_folder))
 
     # --- Aesthetics (collapsible, 3 individual fields) ---
-    aes_folder = hou.FolderParmTemplate("vgl_folder_aesthetics", "Aesthetics",
+    aes_folder = hou.FolderParmTemplate(f"{p}vgl_folder_aesthetics", "Aesthetics",
                                          folder_type=hou.folderType.Collapsible)
     for suffix, label in [("colorscheme", "Color Scheme"), ("comp", "Composition"), ("mood", "Mood & Atmosphere")]:
         parm = hou.StringParmTemplate(f"vgl_aesthetics_{suffix}", label, 1, default_value=[""])
@@ -335,7 +350,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(_apply_disable(aes_folder))
 
     # --- Photographic (collapsible, 4 individual fields) ---
-    photo_folder = hou.FolderParmTemplate("vgl_folder_photo", "Photographic",
+    photo_folder = hou.FolderParmTemplate(f"{p}vgl_folder_photo", "Photographic",
                                            folder_type=hou.folderType.Collapsible)
     for suffix, label in [("camangle", "Camera Angle"), ("dof", "Depth of Field"),
                           ("focus", "Focus"), ("lens", "Lens / Focal Length")]:
@@ -344,14 +359,14 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(_apply_disable(photo_folder))
 
     # --- Style (collapsible, single field) ---
-    style_folder = hou.FolderParmTemplate("vgl_folder_style", "Style",
+    style_folder = hou.FolderParmTemplate(f"{p}vgl_folder_style", "Style",
                                            folder_type=hou.folderType.Collapsible)
     style_parm = hou.StringParmTemplate("vgl_style_text", "", 1, default_value=[""])
     style_folder.addParmTemplate(style_parm)
     vgl_tab.addParmTemplate(_apply_disable(style_folder))
 
     # --- Text Overlays (collapsible, raw JSON — usually empty) ---
-    text_folder = hou.FolderParmTemplate("vgl_folder_text", "Text Overlays",
+    text_folder = hou.FolderParmTemplate(f"{p}vgl_folder_text", "Text Overlays",
                                           folder_type=hou.folderType.Collapsible)
     text_parm = hou.StringParmTemplate("vgl_text_json", "", 1, default_value=[""])
     text_parm.setTags({"editor": "1", "editorLines": "4"})
@@ -359,7 +374,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
     vgl_tab.addParmTemplate(_apply_disable(text_folder))
 
     # --- Other Fields (collapsible, raw JSON catch-all) ---
-    other_folder = hou.FolderParmTemplate("vgl_folder_other", "Other Fields",
+    other_folder = hou.FolderParmTemplate(f"{p}vgl_folder_other", "Other Fields",
                                            folder_type=hou.folderType.Collapsible)
     other_parm = hou.StringParmTemplate("vgl_other", "", 1, default_value=[""])
     other_parm.setTags({"editor": "1", "editorLines": "4"})
@@ -394,7 +409,7 @@ def _build_vgl_editor_tab(generate_callback=None, generate_label="Generate",
         vgl_tab.addParmTemplate(gen_btn)
 
     # --- Raw JSON (advanced, collapsible) ---
-    raw_folder = hou.FolderParmTemplate("vgl_folder_raw", "Raw JSON (Advanced)",
+    raw_folder = hou.FolderParmTemplate(f"{p}vgl_folder_raw", "Raw JSON (Advanced)",
                                          folder_type=hou.folderType.Collapsible)
     sp_parm = hou.StringParmTemplate("structured_prompt", "Full VGL JSON", 1, default_value=[""])
     sp_parm.setTags({"editor": "1", "editorLines": "12"})
@@ -540,6 +555,15 @@ def _wire_internals(hda_node, max_inputs):
             print(f"  Wired rop_save_mask")
 
 
+_ON_CREATED_SCRIPT = '''# Clear stale result_path on node creation/duplication
+node = kwargs.get("node")
+if node is not None:
+    rp = node.parm("result_path")
+    if rp is not None and rp.evalAsString().strip():
+        rp.set("")
+'''
+
+
 def _finalize(hda_node, hda_def, hda_file, pymod_content, cop_net, name, max_inputs=1):
     """Wire internals, set PythonModule, save, install, cleanup."""
     _wire_internals(hda_node, max_inputs)
@@ -547,8 +571,14 @@ def _finalize(hda_node, hda_def, hda_file, pymod_content, cop_net, name, max_inp
     hda_def.addSection("PythonModule", pymod_content)
     hda_def.setExtraFileOption("PythonModule/IsPython", True)
 
-    # template_node=hda_node ensures node contents (including rop_save_input
-    # created in _wire_internals via allowEditingOfContents) are captured.
+    # Clear result_path on node creation/duplication to prevent "missing image" errors
+    hda_def.addSection("OnCreated", _ON_CREATED_SCRIPT)
+    hda_def.setExtraFileOption("OnCreated/IsPython", True)
+
+    # Save definition first (parameters, PythonModule, OnCreated).
+    hda_def.save(hda_file)
+    # Then save with template_node to capture internal node wiring
+    # (rop_save_input, loader_result, switch_result created by _wire_internals).
     hda_def.save(hda_file, template_node=hda_node)
     hou.hda.installFile(hda_file)
 
@@ -809,6 +839,7 @@ def build_fibo_edit_recipes():
         "object_edits": [
             ("delete_object",        "Delete Object"),
             ("replace_object",       "Replace Object"),
+            ("isolate_object",       "Isolate Object"),
             ("change_object_color",  "Change Object Color"),
             ("change_object_material","Change Object Material"),
             ("add_vegetation",       "Add Vegetation"),
@@ -947,6 +978,7 @@ def build_fibo_edit_recipes():
     ptg.append(_build_vgl_editor_tab(
         generate_callback="hou.phm().on_fibo_edit_recipes(kwargs)",
         generate_label="Run FIBO Edit Presets",
+        prefix="rec_",
     ))
 
     # --- Results tab ---
@@ -1175,19 +1207,9 @@ def build_generate_image():
         generate_label="Run FIBO Generate",
         tab_label="Structured Prompt",
         disable_condition=_DISABLE_STRUCT,
+        prefix="gen_",
+        mode_toggle=("use_structured_prompt", "Use Structured Prompt", _TOGGLE_STRUCT_CB),
     )
-    # Insert mode toggle at position 0 (before all VGL content)
-    struct_toggle = hou.ToggleParmTemplate("use_structured_prompt", "Use Structured Prompt", default_value=False)
-    struct_toggle.setScriptCallback(_TOGGLE_STRUCT_CB)
-    struct_toggle.setScriptCallbackLanguage(hou.scriptLanguage.Python)
-    struct_tab.addParmTemplate(struct_toggle)  # will reorder below
-    # Move toggle to the top by rebuilding the folder
-    templates = list(struct_tab.parmTemplates())
-    # Pop the last item (toggle) and insert at front
-    toggle_tmpl = templates.pop()
-    templates.insert(0, toggle_tmpl)
-    templates.insert(1, hou.SeparatorParmTemplate("struct_sep0"))
-    struct_tab.setParmTemplates(templates)
     ptg.append(struct_tab)
 
     # --- Settings tab (extracted from old Main) ---
@@ -1379,18 +1401,9 @@ def build_fibo_edit():
         generate_label="Run FIBO Edit",
         tab_label="Structured Prompt",
         disable_condition=_DISABLE_STRUCT,
+        prefix="edt_",
+        mode_toggle=("use_structured_prompt", "Use Structured Prompt", _TOGGLE_STRUCT_CB),
     )
-    # Insert mode toggle at position 0 (before all VGL content)
-    struct_toggle = hou.ToggleParmTemplate("use_structured_prompt", "Use Structured Prompt", default_value=False)
-    struct_toggle.setScriptCallback(_TOGGLE_STRUCT_CB)
-    struct_toggle.setScriptCallbackLanguage(hou.scriptLanguage.Python)
-    struct_tab.addParmTemplate(struct_toggle)  # will reorder below
-    # Move toggle to the top by rebuilding the folder
-    templates = list(struct_tab.parmTemplates())
-    toggle_tmpl = templates.pop()
-    templates.insert(0, toggle_tmpl)
-    templates.insert(1, hou.SeparatorParmTemplate("struct_sep0"))
-    struct_tab.setParmTemplates(templates)
     ptg.append(struct_tab)
 
     # --- Settings tab ---
@@ -2211,6 +2224,7 @@ def build_viewport_render():
         generate_label="Run Bria Render",
         show_refresh_upstream=False,
         disable_condition='{ use_structured_prompt == 0 }',
+        prefix="vr_",
     )
     for child in vgl_editor.parmTemplates():
         struct_tab.addParmTemplate(child)
@@ -2602,6 +2616,7 @@ def build_top_bria_batch():
             ("fix_background_coherence", "Fix Background Coherence"),
         ],
         "object_edits": [
+            ("isolate_object",       "Isolate Object"),
             ("add_vegetation",       "Add Vegetation"),
             ("add_people",           "Add People"),
             ("add_clouds",           "Add Clouds"),
