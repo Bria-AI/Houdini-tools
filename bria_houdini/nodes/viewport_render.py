@@ -147,11 +147,15 @@ def get_output_directory() -> str:
     Returns:
         Normalized path to output directory (creates if needed)
     """
-    try:
-        import hou
-        output_dir = resolve_temp_dir(hou)
-    except Exception:
-        output_dir = tempfile.gettempdir()
+    from bria_houdini.node_utils import _desktop_output_dir
+
+    output_dir = _desktop_output_dir()
+    if not output_dir:
+        try:
+            import hou
+            output_dir = resolve_temp_dir(hou)
+        except Exception:
+            output_dir = tempfile.gettempdir()
 
     os.makedirs(output_dir, exist_ok=True)
     return output_dir.replace("\\", "/")

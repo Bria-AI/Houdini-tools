@@ -229,9 +229,21 @@ class BriaDashboardPanel(QtWidgets.QWidget):
         output_layout = QtWidgets.QVBoxLayout(output_group)
 
         self._use_output_dir = QtWidgets.QCheckBox("Use Output Directory")
-        self._use_output_dir.setToolTip("Save results to a specific folder instead of the system temp directory")
+        self._use_output_dir.setToolTip("Save results to a specific folder instead of the default location")
         self._use_output_dir.toggled.connect(self._on_output_dir_toggled)
         output_layout.addWidget(self._use_output_dir)
+
+        self._use_temp_dir = QtWidgets.QCheckBox("Use Temp Directory")
+        self._use_temp_dir.setToolTip("Save results to the system temp directory (deleted on restart)")
+        self._use_temp_dir.toggled.connect(self._on_temp_dir_toggled)
+        output_layout.addWidget(self._use_temp_dir)
+
+        temp_warning = QtWidgets.QLabel("Warning: images in temp may be deleted when your machine restarts.")
+        temp_warning.setStyleSheet("color: #ff9800; font-size: 11px;")
+        temp_warning.setWordWrap(True)
+        self._temp_warning = temp_warning
+        self._temp_warning.hide()
+        output_layout.addWidget(self._temp_warning)
 
         path_row = QtWidgets.QHBoxLayout()
         self._output_dir_input = QtWidgets.QLineEdit()
@@ -309,6 +321,10 @@ class BriaDashboardPanel(QtWidgets.QWidget):
             output_dir = str(data.get("houdini_output_dir") or "").strip()
             if output_dir:
                 self._output_dir_input.setText(output_dir)
+
+            # Load temp directory state
+            use_temp = bool(data.get("use_temp_dir"))
+            self._use_temp_dir.setChecked(use_temp)
         except Exception as e:
             logger.exception("Failed to load state")
             self._update_status("error", f"Error: {str(e)}")
@@ -457,6 +473,14 @@ class BriaDashboardPanel(QtWidgets.QWidget):
         self._output_dir_input.setEnabled(checked)
         self._browse_btn.setEnabled(checked)
         self._set_output_btn.setEnabled(checked)
+        if checked:
+            self._use_temp_dir.setChecked(False)
+
+    def _on_temp_dir_toggled(self, checked: bool):
+        """Enable/disable temp directory mode."""
+        self._temp_warning.setVisible(checked)
+        if checked:
+            self._use_output_dir.setChecked(False)
 
     def _browse_output_dir(self):
         """Open a folder browser for output directory."""
@@ -474,7 +498,10 @@ class BriaDashboardPanel(QtWidgets.QWidget):
             use_output = self._use_output_dir.isChecked()
             output_dir = self._output_dir_input.text().strip()
 
+            use_temp = self._use_temp_dir.isChecked()
+
             data["use_bria_project_path"] = use_output
+            data["use_temp_dir"] = use_temp
             if output_dir:
                 data["houdini_output_dir"] = output_dir
             else:
@@ -489,10 +516,13 @@ class BriaDashboardPanel(QtWidgets.QWidget):
             else:
                 os.environ.pop("BRIA_PROJECT_PATH", None)
 
-            self._show_message(
-                f"Output directory {'set to: ' + output_dir if use_output and output_dir else 'using temp (default)'}",
-                error=False,
-            )
+            if use_temp:
+                msg = "Output: temp directory (images deleted on restart)"
+            elif use_output and output_dir:
+                msg = f"Output: {output_dir}"
+            else:
+                msg = "Output: project directory or Desktop (default)"
+            self._show_message(msg, error=False)
         except Exception as e:
             self._show_message(f"Failed to save output directory: {e}", error=True)
 

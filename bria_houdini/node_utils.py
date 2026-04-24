@@ -152,23 +152,48 @@ def _desktop_output_dir() -> str | None:
         return None
 
 
+def _hip_output_dir() -> str | None:
+    """Return $HIP/bria_output/ if a Houdini project is set, creating it if needed."""
+    try:
+        import hou
+        hip = hou.expandString("$HIP")
+        if hip and hip != "$HIP" and os.path.isdir(hip):
+            output_dir = os.path.join(hip, "bria_output")
+            os.makedirs(output_dir, exist_ok=True)
+            return output_dir
+    except Exception:
+        pass
+    return None
+
+
 def resolve_output_dir(temp_dir: str, run_id: str, node_name: str) -> str:
     """Resolve the output directory for a Bria node result.
 
     Priority:
+    0. Temp directory (if use_temp_dir is enabled — ephemeral, deleted on restart)
     1. Global project path (if use_bria_project_path is enabled and valid)
-    2. ~/Desktop/bria_houdini_tool_output/
-    3. Temp directory fallback
+    2. $HIP/bria_output/ (Houdini project directory)
+    3. ~/Desktop/bria_houdini_tool_output/
+    4. Temp directory fallback
     """
     from bria_houdini.bria_core.config import load_config
 
     cfg = load_config()
+
+    # Priority 0: explicit temp dir (user opted in via Dashboard)
+    if cfg.use_temp_dir:
+        return os.path.join(temp_dir, f"bria_{node_name}_result_{run_id}.png")
+
     if cfg.use_bria_project_path:
         output_dir = (cfg.houdini_output_dir or "").strip()
         if not output_dir:
             output_dir = os.environ.get("BRIA_PROJECT_PATH", "").strip()
         if output_dir and os.path.isdir(output_dir):
             return os.path.join(output_dir, f"bria_{node_name}_result_{run_id}.png")
+
+    hip_dir = _hip_output_dir()
+    if hip_dir:
+        return os.path.join(hip_dir, f"bria_{node_name}_result_{run_id}.png")
 
     desktop_dir = _desktop_output_dir()
     if desktop_dir:

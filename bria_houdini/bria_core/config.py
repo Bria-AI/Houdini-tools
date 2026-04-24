@@ -34,6 +34,7 @@ class BriaConfig:
     use_bria_project_path: Optional[bool] = None
     default_timeout: Optional[int] = None
     cache_enabled: Optional[bool] = None
+    use_temp_dir: Optional[bool] = None
 
 
 def _read_config_file(path: Path) -> Dict[str, Any]:
@@ -70,6 +71,7 @@ def load_config(path: Optional[Path] = None) -> BriaConfig:
         use_bria_project_path=data.get("use_bria_project_path"),
         default_timeout=data.get("default_timeout"),
         cache_enabled=data.get("cache_enabled"),
+        use_temp_dir=data.get("use_temp_dir"),
     )
 
 
