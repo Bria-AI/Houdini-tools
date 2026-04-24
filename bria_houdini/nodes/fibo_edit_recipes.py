@@ -69,6 +69,7 @@ CATEGORY_ORDER = [
 # ---------------------------------------------------------------------------
 TARGETED_OBJECT_PRESETS = frozenset({
     "delete_object", "replace_object", "change_object_color", "change_object_material",
+    "isolate_object",
 })
 
 # Action sentence templates per preset.
@@ -95,6 +96,11 @@ _OBJ_ACTIONS = {
         "fallback": "Change the material of the specified object to the described material.",
         "single": "Change the material of {obj1} to {mod1}.",
         "multi": "Change the materials of the following objects: {obj_mod_list}.",
+    },
+    "isolate_object": {
+        "fallback": "Isolate the specified object from the scene by removing everything else.",
+        "single": "Isolate {obj1} from the scene by removing everything else.",
+        "multi": "Isolate the following objects from the scene by removing everything else: {obj_list}.",
     },
 }
 
@@ -171,6 +177,26 @@ _OBJ_BODIES = {
         "Lighting and shadow changes should only reflect the new material's natural properties.\n"
         "Result requirement:\n"
         "The output should appear as if the object(s) were always made of the target material, with correct surface properties. "
+        "If the specified object cannot be identified, return the image unchanged."
+    ),
+    "isolate_object": (
+        "STRICT LOCKS (non-negotiable):\n"
+        "Do NOT move, warp, scale, rotate, or reshape the specified object(s).\n"
+        "Do NOT alter the specified object(s)' color, texture, material, lighting, or shadows.\n"
+        "Preserve the specified object(s)' silhouette, edges, and fine detail exactly.\n"
+        "Scope of work:\n"
+        "Remove EVERYTHING except the specified object(s) from the scene.\n"
+        "Replace the entire background and all other objects with a clean, flat, neutral medium gray backdrop (approximately RGB 128,128,128 / #808080).\n"
+        "Keep any natural contact shadows or cast shadows directly attached to the specified object(s) to preserve grounding, rendered softly on the gray backdrop.\n"
+        "CRITICAL RULES:\n"
+        "The specified object(s) must appear pixel-identical to the original — same position, same scale, same colors, same lighting.\n"
+        "The gray backdrop must be completely flat and uniform — no gradients, no texture, no vignetting, no visible seams.\n"
+        "Do NOT add any new objects, props, or environmental elements.\n"
+        "Do NOT include any remnants of the original background, other objects, or scene elements.\n"
+        "Clean, sharp edges around the isolated object(s) — no halos, no fringing, no bleeding from the removed background.\n"
+        "Result requirement:\n"
+        "The output should appear as if the specified object(s) were photographed against a seamless neutral gray studio backdrop. "
+        "This flat gray background is optimized for downstream background removal (RMBG) — it should be easily separable from the subject. "
         "If the specified object cannot be identified, return the image unchanged."
     ),
 }
@@ -780,10 +806,11 @@ PRESET_CATEGORIES = {
          "The output should have consistent depth cues across all elements matching their spatial position in the scene. If no depth issues are detected, return the image unchanged."),
     ],
 
-    # ---- Object Edits (12) ----
+    # ---- Object Edits (13) ----
     "object_edits": [
         ("delete_object", "Delete Object", _obj_fallback_prompt("delete_object")),
         ("replace_object", "Replace Object", _obj_fallback_prompt("replace_object")),
+        ("isolate_object", "Isolate Object", _obj_fallback_prompt("isolate_object")),
         ("change_object_color", "Change Object Color", _obj_fallback_prompt("change_object_color")),
         ("change_object_material", "Change Object Material", _obj_fallback_prompt("change_object_material")),
         ("add_vegetation", "Add Vegetation",
