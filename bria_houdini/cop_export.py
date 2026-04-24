@@ -281,6 +281,13 @@ def export_via_internal_rop(owner_node: Any, rop_name: str, dst_path: str | None
         _debug_log(f"internal ROP: owner_node or rop_name missing")
         return None
 
+    # Unlock HDA contents so internal ROP nodes can be accessed/modified.
+    # Required on Linux where render() is used (macOS skips render due to deadlock).
+    try:
+        owner_node.allowEditingOfContents()
+    except Exception:
+        pass
+
     try:
         rop = owner_node.node(rop_name)
     except Exception as exc:
