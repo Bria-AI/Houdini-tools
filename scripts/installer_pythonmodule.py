@@ -161,7 +161,7 @@ def install(kwargs):
             "version": "1.0",
             "name": PACKAGE_NAME,
             "description": "Bria Houdini integration (HDAs + API adapter).",
-            "path": repo_root,
+            "path": bria_pkg_dir,
             "env": [
                 {
                     "PYTHONPATH": {
